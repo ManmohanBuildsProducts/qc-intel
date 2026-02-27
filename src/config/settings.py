@@ -80,6 +80,7 @@ class Settings(BaseSettings):
     scrape_delay_max: float = 3.0
     scrape_max_retries: int = 3
     scrape_timeout: int = 30
+    scrape_max_agent_turns: int = 15
 
     # Embeddings
     embedding_model: str = "all-MiniLM-L6-v2"
@@ -88,7 +89,7 @@ class Settings(BaseSettings):
 
     # Claude API
     anthropic_api_key: str = ""
-    scraper_model: str = "claude-haiku-4-5"
+    scraper_model: str = "gemini-2.0-flash"
     normalizer_model: str = "claude-sonnet-4-6"
     analyst_model: str = "gemini-2.0-flash"
     max_budget_scraper: float = 0.50

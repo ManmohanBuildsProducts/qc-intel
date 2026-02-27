@@ -3,35 +3,25 @@
 import sqlite3
 
 from src.agents.scraper import create_scraper
-from src.agents.scraper.base import PLAYWRIGHT_MCP_CONFIG, BaseScraper
+from src.agents.scraper.base import ALLOWED_TOOLS, PLAYWRIGHT_SERVER, BaseScraper
 from src.agents.scraper.blinkit import BlinkitScraper
 from src.agents.scraper.instamart import InstamartScraper
 from src.agents.scraper.zepto import ZeptoScraper
-from src.config.settings import settings
 from src.models.product import Platform
 
 
 class TestBaseScraper:
-    def test_mcp_config(self, db_session: sqlite3.Connection) -> None:
-        scraper = BlinkitScraper(db_session)
-        opts = scraper.get_agent_options()
-        assert "playwright" in opts["mcp_servers"]
-        assert opts["mcp_servers"]["playwright"] == PLAYWRIGHT_MCP_CONFIG
+    def test_playwright_server_config(self, db_session: sqlite3.Connection) -> None:
+        assert PLAYWRIGHT_SERVER.command == "npx"
+        assert "@anthropic-ai/mcp-playwright@latest" in PLAYWRIGHT_SERVER.args
 
-    def test_model_selection(self, db_session: sqlite3.Connection) -> None:
-        scraper = BlinkitScraper(db_session)
-        opts = scraper.get_agent_options()
-        assert opts["model"] == settings.scraper_model
+    def test_allowed_tools(self, db_session: sqlite3.Connection) -> None:
+        assert "browser_navigate" in ALLOWED_TOOLS
+        assert "browser_network_requests" in ALLOWED_TOOLS
+        assert "browser_snapshot" in ALLOWED_TOOLS
 
-    def test_agent_options_structure(self, db_session: sqlite3.Connection) -> None:
-        scraper = BlinkitScraper(db_session)
-        opts = scraper.get_agent_options()
-        assert "system_prompt" in opts
-        assert "max_turns" in opts
-        assert "max_budget_usd" in opts
-        assert "allowed_tools" in opts
-        assert "permission_mode" in opts
-        assert opts["max_budget_usd"] == settings.max_budget_scraper
+    def test_allowed_tools_are_minimal(self, db_session: sqlite3.Connection) -> None:
+        assert len(ALLOWED_TOOLS) <= 10
 
     def test_service_initialized(self, db_session: sqlite3.Connection) -> None:
         scraper = BlinkitScraper(db_session)
