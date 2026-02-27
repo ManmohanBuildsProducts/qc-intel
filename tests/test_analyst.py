@@ -96,14 +96,14 @@ class TestGenerateReport:
         ])
 
         mock_response = MagicMock()
-        mock_response.content = [MagicMock(text=mock_report)]
+        mock_response.text = mock_report
 
         analytics = AnalyticsService(db_session)
 
-        with patch("src.agents.analyst.anthropic") as mock_anthropic_mod:
-            mock_client = AsyncMock()
-            mock_client.messages.create = AsyncMock(return_value=mock_response)
-            mock_anthropic_mod.AsyncAnthropic.return_value = mock_client
+        with patch("src.agents.analyst.genai.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+            mock_client_cls.return_value = mock_client
 
             report = await analytics.generate_report("Amul", "Dairy & Bread")
 

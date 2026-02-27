@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-import anthropic
+from google import genai
 
 from src.config.settings import settings
 from src.db.repository import CanonicalRepository, CatalogRepository, ObservationRepository, SalesRepository
@@ -131,17 +131,17 @@ class AnalyticsService:
                 platform_count=0,
             )
 
-        client = anthropic.AsyncAnthropic()
         user_message = self._format_data_for_claude(data)
-
-        response = await client.messages.create(
+        client = genai.Client()
+        response = await client.aio.models.generate_content(
             model=settings.analyst_model,
-            max_tokens=4096,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_message}],
+            contents=user_message,
+            config=genai.types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                max_output_tokens=4096,
+            ),
         )
-
-        report_content = response.content[0].text
+        report_content = response.text
         report_path = self._save_report(brand, category, report_content)
 
         return MarketReport(

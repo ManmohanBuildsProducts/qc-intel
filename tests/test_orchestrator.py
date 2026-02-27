@@ -111,12 +111,12 @@ class TestPipelineOrchestrator:
 
         mock_report = "## Executive Summary\nTest.\n\n## Brand Overview\nTest."
         mock_response = MagicMock()
-        mock_response.content = [MagicMock(text=mock_report)]
+        mock_response.text = mock_report
 
-        with patch("anthropic.AsyncAnthropic") as mock_cls:
-            mock_client = AsyncMock()
-            mock_client.messages.create = AsyncMock(return_value=mock_response)
-            mock_cls.return_value = mock_client
+        with patch("src.agents.analyst.genai.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+            mock_client_cls.return_value = mock_client
 
             report = await orch.run_analysis("Amul", "Dairy & Bread")
 
@@ -132,12 +132,12 @@ class TestPipelineOrchestrator:
 
         mock_report = "\n\n".join([f"## Section {i}\nContent." for i in range(8)])
         mock_response = MagicMock()
-        mock_response.content = [MagicMock(text=mock_report)]
+        mock_response.text = mock_report
 
-        with patch("anthropic.AsyncAnthropic") as mock_cls:
-            mock_client = AsyncMock()
-            mock_client.messages.create = AsyncMock(return_value=mock_response)
-            mock_cls.return_value = mock_client
+        with patch("src.agents.analyst.genai.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+            mock_client_cls.return_value = mock_client
 
             report = await orch.run_demo()
 

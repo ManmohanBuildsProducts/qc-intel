@@ -203,12 +203,12 @@ class TestCharts:
 class TestReports:
     def test_generate_report(self, client: TestClient) -> None:
         mock_response = MagicMock()
-        mock_response.content = [MagicMock(text="## Executive Summary\nTest report content")]
+        mock_response.text = "## Executive Summary\nTest report content"
 
-        mock_client = AsyncMock()
-        mock_client.messages.create = AsyncMock(return_value=mock_response)
-
-        with patch("src.agents.analyst.anthropic.AsyncAnthropic", return_value=mock_client):
+        with patch("src.agents.analyst.genai.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+            mock_client_cls.return_value = mock_client
             resp = client.post(
                 "/api/reports/generate",
                 json={"brand": "Amul", "category": "Dairy & Bread"},

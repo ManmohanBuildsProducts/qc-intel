@@ -90,7 +90,7 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     scraper_model: str = "claude-haiku-4-5"
     normalizer_model: str = "claude-sonnet-4-6"
-    analyst_model: str = "claude-opus-4-6"
+    analyst_model: str = "gemini-2.0-flash"
     max_budget_scraper: float = 0.50
     max_budget_normalizer: float = 1.00
     max_budget_analyst: float = 3.00
