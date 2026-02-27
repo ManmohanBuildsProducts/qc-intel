@@ -1,11 +1,11 @@
 # QC Intel — Progress Log
 
 ## Current State
-- **Last completed:** WS1.5 (test fixtures + conftest)
-- **Next up:** WS2.1 (base scraper agent factory)
-- **Gate status:** Hour 3 PASSED
-- **Tests:** 84/84 passing
-- **Lint:** ruff clean (0 errors)
+- **Last completed:** WS2 (scraper agent layer)
+- **Next up:** WS3 (sales estimation + normalizer agent)
+- **Gate status:** WS2 PASSED
+- **Tests:** 131/131 passing (84 WS0/WS1 + 47 WS2)
+- **Lint:** ruff clean on all WS2 files (0 errors)
 - **Branch:** main
 
 ## Session History
@@ -25,3 +25,13 @@
 - Test fixtures: 10 products per platform (Blinkit, Zepto, Instamart)
 - conftest.py: shared fixtures (db_session, sample_products, sample_observations)
 - Gate Hour 3: PASSED — 84/84 tests, ruff clean, DB initializes, all modules importable
+
+### Session 2 — 2026-02-27 (WS2)
+- Response parsers: 3 pure functions mapping platform JSON → ScrapedProduct (Blinkit, Zepto, Instamart)
+- ScrapeService: orchestrates parse → upsert catalog → insert observations → manage scrape run
+- BaseScraper: abstract class using Claude Agent SDK + Playwright MCP
+- Platform scrapers: BlinkitScraper, ZeptoScraper, InstamartScraper with platform-specific prompts/URLs
+- Factory: create_scraper(platform) returns correct scraper class
+- Exports: full __init__.py with all public symbols
+- Tests: 21 parser tests + 6 service tests + 20 agent tests = 47 new tests
+- Gate WS2: PASSED — 131/131 tests, ruff clean, imports verified, parsers produce correct output
