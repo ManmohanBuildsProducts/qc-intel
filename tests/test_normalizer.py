@@ -132,7 +132,7 @@ class TestNormalizerService:
         assert len(multi_platform) > 0
 
 
-class TestClaudeValidation:
+class TestLLMValidation:
     @pytest.mark.asyncio
     async def test_validate_match_yes(self, db_session: sqlite3.Connection) -> None:
         normalizer = NormalizerService(db_session)
@@ -156,13 +156,13 @@ class TestClaudeValidation:
         )
 
         mock_response = MagicMock()
-        mock_response.content = [MagicMock(text="YES")]
+        mock_response.text = "YES"
 
-        with patch("anthropic.AsyncAnthropic") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client.messages.create = AsyncMock(return_value=mock_response)
+        with patch("src.agents.normalizer.genai.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
             mock_client_cls.return_value = mock_client
-            result = await normalizer._validate_match_with_claude(product_a, product_b, 0.78)
+            result = await normalizer._validate_match_with_llm(product_a, product_b, 0.78)
 
         assert result is True
 
@@ -189,12 +189,12 @@ class TestClaudeValidation:
         )
 
         mock_response = MagicMock()
-        mock_response.content = [MagicMock(text="NO")]
+        mock_response.text = "NO"
 
-        with patch("anthropic.AsyncAnthropic") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client.messages.create = AsyncMock(return_value=mock_response)
+        with patch("src.agents.normalizer.genai.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
             mock_client_cls.return_value = mock_client
-            result = await normalizer._validate_match_with_claude(product_a, product_b, 0.72)
+            result = await normalizer._validate_match_with_llm(product_a, product_b, 0.72)
 
         assert result is False

@@ -7,19 +7,19 @@ Multi-agent pipeline for quick commerce market intelligence across Blinkit, Zept
 ## Architecture
 
 ```
-Scrape (Playwright MCP) → Estimate (morning/night delta) → Normalize (embeddings + Claude) → Analyze (Claude Opus)
+Scrape (Gemini + Playwright MCP) → Estimate (morning/night delta) → Normalize (embeddings + Gemini) → Analyze (Gemini)
 ```
 
-**Agents** (all Claude Agent SDK):
-- **Scraper agents** (×3): Platform-specific, Playwright MCP, XHR interception
-- **Normalizer agent**: sentence-transformers embeddings + Claude validation
-- **Analytics agent**: Claude Opus, generates 8-section market reports
+**Agents** (all Gemini-powered):
+- **Scraper agents** (×3): Platform-specific, Gemini function calling + Playwright MCP, XHR interception
+- **Normalizer agent**: sentence-transformers embeddings + Gemini validation for ambiguous matches
+- **Analytics agent**: Gemini, generates 8-section market reports
 
 ## Tech Stack
 
 **Backend:**
 - Python 3.12+, Pydantic v2
-- Claude Agent SDK (`claude-agent-sdk`) + Anthropic SDK
+- Google Gemini SDK (`google-genai`) for LLM agents
 - Playwright MCP (headless Firefox)
 - `sentence-transformers` (`all-MiniLM-L6-v2`) for embeddings
 - SQLite (WAL mode) for time-series data
@@ -122,10 +122,9 @@ tests/
 
 | Agent | Model | Budget |
 |-------|-------|--------|
-| Scraper | `claude-haiku-4-5` | $0.50/run |
-| Normalizer validation | `claude-sonnet-4-6` | $1.00/run |
-| Quality eval | `claude-opus-4-6` | $1.00/run |
-| Analyst | `claude-opus-4-6` | $3.00/report |
+| Scraper | `gemini-2.0-flash` | $0.50/run |
+| Normalizer validation | `gemini-2.0-flash` | $1.00/run |
+| Analyst | `gemini-2.0-flash` | $3.00/report |
 
 ## Sales Estimation
 

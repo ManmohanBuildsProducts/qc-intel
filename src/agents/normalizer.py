@@ -1,8 +1,12 @@
-"""Normalizer agent — cross-platform product matching via embeddings + Claude validation."""
+"""Normalizer agent — cross-platform product matching via embeddings + Gemini validation."""
 
 import logging
 import sqlite3
 
+from google import genai
+from google.genai import types as genai_types
+
+from src.config.settings import settings
 from src.db.repository import CanonicalRepository
 from src.embeddings.product_embedder import ProductEmbedder
 from src.embeddings.unit_normalizer import normalize_unit
@@ -132,27 +136,20 @@ class NormalizerService:
             unmapped_count=unmapped_count,
         )
 
-    async def _validate_match_with_claude(
+    async def _validate_match_with_llm(
         self, product_a: CatalogProduct, product_b: CatalogProduct, similarity: float
     ) -> bool:
-        """Use Claude to validate an ambiguous product match."""
-        import anthropic
-
-        client = anthropic.AsyncAnthropic()
-        response = await client.messages.create(
-            model="claude-haiku-4-5",
-            max_tokens=10,
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        f"Are these the same product? Answer YES or NO only.\n"
-                        f"Product A: {product_a.name} ({product_a.brand}, {product_a.unit})\n"
-                        f"Product B: {product_b.name} ({product_b.brand}, {product_b.unit})\n"
-                        f"Similarity score: {similarity:.2f}"
-                    ),
-                }
-            ],
+        """Use Gemini to validate an ambiguous product match."""
+        client = genai.Client()
+        response = await client.aio.models.generate_content(
+            model=settings.normalizer_model,
+            contents=(
+                f"Are these the same product? Answer YES or NO only.\n"
+                f"Product A: {product_a.name} ({product_a.brand}, {product_a.unit})\n"
+                f"Product B: {product_b.name} ({product_b.brand}, {product_b.unit})\n"
+                f"Similarity score: {similarity:.2f}"
+            ),
+            config=genai_types.GenerateContentConfig(max_output_tokens=10),
         )
-        answer = response.content[0].text.strip().upper()
+        answer = response.text.strip().upper()
         return answer.startswith("YES")
