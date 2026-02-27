@@ -13,7 +13,7 @@ from src.models.product import Platform
 class TestBaseScraper:
     def test_playwright_server_config(self, db_session: sqlite3.Connection) -> None:
         assert PLAYWRIGHT_SERVER.command == "npx"
-        assert "@anthropic-ai/mcp-playwright@latest" in PLAYWRIGHT_SERVER.args
+        assert "@playwright/mcp@latest" in PLAYWRIGHT_SERVER.args
 
     def test_allowed_tools(self, db_session: sqlite3.Connection) -> None:
         assert "browser_navigate" in ALLOWED_TOOLS

@@ -89,14 +89,14 @@ class Settings(BaseSettings):
 
     # Claude API
     anthropic_api_key: str = ""
-    scraper_model: str = "gemini-2.0-flash"
-    normalizer_model: str = "gemini-2.0-flash"
-    analyst_model: str = "gemini-2.0-flash"
+    scraper_model: str = "gemini-2.5-flash"
+    normalizer_model: str = "gemini-2.5-flash"
+    analyst_model: str = "gemini-2.5-flash"
     max_budget_scraper: float = 0.50
     max_budget_normalizer: float = 1.00
     max_budget_analyst: float = 3.00
 
-    model_config = {"env_prefix": "QC_", "env_file": ".env"}
+    model_config = {"env_prefix": "QC_", "env_file": ".env", "extra": "ignore"}
 
 
 # Singleton
