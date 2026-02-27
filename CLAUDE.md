@@ -17,13 +17,22 @@ Scrape (Playwright MCP) → Estimate (morning/night delta) → Normalize (embedd
 
 ## Tech Stack
 
+**Backend:**
 - Python 3.12+, Pydantic v2
 - Claude Agent SDK (`claude-agent-sdk`) + Anthropic SDK
 - Playwright MCP (headless Firefox)
 - `sentence-transformers` (`all-MiniLM-L6-v2`) for embeddings
 - SQLite (WAL mode) for time-series data
 - `numpy` + `scikit-learn` for cosine similarity
+- FastAPI + uvicorn (analytics dashboard API)
 - `pytest` + `pytest-asyncio` for testing
+
+**Frontend:**
+- Next.js 15 (App Router) + React + TypeScript
+- Tailwind CSS v4 + `@tailwindcss/typography`
+- Chart.js + `react-chartjs-2` for visualizations
+- `react-markdown` for report rendering
+- pnpm package manager
 
 ## Data Model
 
@@ -37,7 +46,7 @@ Entity/observation split:
 
 ## Conventions
 
-- **DB access**: Always via repository pattern (`src/db/repository.py`), never raw SQL elsewhere
+- **DB access**: Always via repository pattern (`src/db/repository.py`), never raw SQL elsewhere (exception: read-only chart aggregations in `api/routers/charts.py`)
 - **Data contracts**: All data flows through Pydantic models (`src/models/`)
 - **Exceptions**: Custom hierarchy rooted at `QCIntelError` (`src/models/exceptions.py`)
 - **Logging**: `logging` module, structured — no `print()` statements
@@ -48,11 +57,14 @@ Entity/observation split:
 ## Key Commands
 
 ```bash
-# Run all tests
+# Run all tests (183 tests: 167 pipeline + 16 API)
 pytest tests/ -v --tb=short
 
 # Lint
-ruff check src/
+ruff check src/ api/ tests/
+
+# TypeScript check
+cd web && pnpm tsc --noEmit
 
 # CLI
 python analyze.py --scrape --morning          # Morning scrape run
@@ -62,23 +74,40 @@ python analyze.py --normalize --category "Dairy & Bread"
 python analyze.py --analyze --brand "Amul" --category "Dairy & Bread"
 python analyze.py --demo                      # Full demo with sample data
 python analyze.py --full-pipeline             # Everything end-to-end
+
+# Dashboard (requires demo data seeded first)
+python analyze.py --demo                      # Seed fixture data
+uvicorn api.main:app --reload --port 8000     # Start API server
+cd web && pnpm dev                            # Start frontend (separate terminal)
+# → Dashboard at http://localhost:3000
 ```
 
 ## Project Structure
 
 ```
-src/
-├── agents/scraper/   — Platform-specific scraper agents
-├── agents/           — normalizer.py, analyst.py
-├── db/               — schema.sql, init_db.py, repository.py
-├── embeddings/       — product_embedder.py, unit_normalizer.py
-├── config/           — settings.py (pincodes, platform configs)
-├── models/           — Pydantic models, exceptions
-└── orchestrator.py   — Pipeline coordination
+src/                        — Core pipeline
+├── agents/scraper/         — Platform-specific scraper agents
+├── agents/                 — normalizer.py, analyst.py
+├── db/                     — schema.sql, init_db.py, repository.py
+├── embeddings/             — product_embedder.py, unit_normalizer.py
+├── config/                 — settings.py (pincodes, platform configs)
+├── models/                 — Pydantic models, exceptions
+└── orchestrator.py         — Pipeline coordination
+api/                        — FastAPI analytics API
+├── main.py                 — App + CORS + router mounting
+├── deps.py                 — DB connection dependency
+├── models.py               — API response Pydantic models
+└── routers/                — data.py, charts.py, reports.py
+web/                        — Next.js 15 dashboard
+├── src/app/                — Pages (dashboard, reports, explorer)
+├── src/components/         — Sidebar, StatsCard, charts, FilterBar, etc.
+├── src/lib/api.ts          — API client
+└── src/types/index.ts      — TypeScript interfaces
 tests/
-├── fixtures/         — Sample JSON per platform
-├── conftest.py       — Shared test fixtures
-└── test_*.py         — Test files mapped to requirements
+├── fixtures/               — Sample JSON per platform
+├── conftest.py             — Shared test fixtures
+├── test_api.py             — FastAPI endpoint tests (16 tests)
+└── test_*.py               — Pipeline tests (167 tests)
 ```
 
 ## Resuming Work
