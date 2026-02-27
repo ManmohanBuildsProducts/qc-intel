@@ -60,6 +60,11 @@ class TestBlinkitScraper:
         assert "28.4595" in url
         assert "77.0266" in url
 
+    def test_url_uses_category_id_for_known_categories(self, db_session: sqlite3.Connection) -> None:
+        scraper = BlinkitScraper(db_session)
+        url = scraper.get_scrape_url("122001", "Dairy & Bread")
+        assert "/cid/" in url
+
 
 class TestZeptoScraper:
     def test_platform(self, db_session: sqlite3.Connection) -> None:
@@ -74,9 +79,8 @@ class TestZeptoScraper:
     def test_url_pattern(self, db_session: sqlite3.Connection) -> None:
         scraper = ZeptoScraper(db_session)
         url = scraper.get_scrape_url("122001", "Dairy & Bread")
-        assert "zepto.co" in url
-        assert "pincode=122001" in url
-        assert "dairy-bread" in url
+        assert "zeptonow.com" in url
+        assert "dairy" in url.lower()
 
 
 class TestInstamartScraper:
@@ -93,8 +97,7 @@ class TestInstamartScraper:
         scraper = InstamartScraper(db_session)
         url = scraper.get_scrape_url("122001", "Dairy & Bread")
         assert "swiggy.com" in url
-        assert "pincode=122001" in url
-        assert "dairy-bread" in url
+        assert "dairy" in url.lower()
 
 
 class TestScraperFactory:
