@@ -1,7 +1,5 @@
 """Tests for unit normalizer — covers R3 (normalization accuracy)."""
 
-import pytest
-
 from src.embeddings.unit_normalizer import normalize_unit
 
 

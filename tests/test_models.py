@@ -2,11 +2,16 @@
 
 import pytest
 
+from src.models.exceptions import (
+    AnalyticsError,
+    ConfigError,
+    DatabaseError,
+    NormalizationError,
+    QCIntelError,
+    ScrapeError,
+)
 from src.models.product import (
-    CanonicalProduct,
-    CatalogProduct,
     Confidence,
-    MarketReport,
     Platform,
     ProductMapping,
     ProductObservation,
@@ -15,14 +20,6 @@ from src.models.product import (
     ScrapeRun,
     ScrapeRunStatus,
     TimeOfDay,
-)
-from src.models.exceptions import (
-    AnalyticsError,
-    ConfigError,
-    DatabaseError,
-    NormalizationError,
-    QCIntelError,
-    ScrapeError,
 )
 
 

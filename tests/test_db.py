@@ -8,8 +8,8 @@ import pytest
 
 from src.db.init_db import EXPECTED_TABLES, init_db
 from src.db.repository import (
-    CatalogRepository,
     CanonicalRepository,
+    CatalogRepository,
     ObservationRepository,
     SalesRepository,
     ScrapeRunRepository,
@@ -124,7 +124,8 @@ class TestSchemaConstraints:
         )
         with pytest.raises(sqlite3.IntegrityError):
             db_conn.execute(
-                "INSERT INTO daily_sales (catalog_id, pincode, sale_date, morning_qty, night_qty, estimated_sales, confidence) "
+                "INSERT INTO daily_sales (catalog_id, pincode, sale_date,"
+                " morning_qty, night_qty, estimated_sales, confidence) "
                 "VALUES (1, '122001', '2026-02-27', 20, 5, 15, 'invalid')"
             )
         db_conn.rollback()
@@ -135,12 +136,14 @@ class TestSchemaConstraints:
             "VALUES ('blinkit', '1', 'Test', 'Dairy')"
         )
         db_conn.execute(
-            "INSERT INTO daily_sales (catalog_id, pincode, sale_date, morning_qty, night_qty, estimated_sales, confidence) "
+            "INSERT INTO daily_sales (catalog_id, pincode, sale_date,"
+            " morning_qty, night_qty, estimated_sales, confidence) "
             "VALUES (1, '122001', '2026-02-27', 20, 5, 15, 'high')"
         )
         with pytest.raises(sqlite3.IntegrityError):
             db_conn.execute(
-                "INSERT INTO daily_sales (catalog_id, pincode, sale_date, morning_qty, night_qty, estimated_sales, confidence) "
+                "INSERT INTO daily_sales (catalog_id, pincode, sale_date,"
+                " morning_qty, night_qty, estimated_sales, confidence) "
                 "VALUES (1, '122001', '2026-02-27', 18, 3, 15, 'high')"
             )
         db_conn.rollback()
@@ -260,7 +263,8 @@ class TestSalesRepository:
         ))
         db_conn.execute(
             """
-            INSERT INTO product_observations (catalog_id, scrape_run_id, pincode, price, max_cart_qty, time_of_day, observed_at)
+            INSERT INTO product_observations
+                (catalog_id, scrape_run_id, pincode, price, max_cart_qty, time_of_day, observed_at)
             VALUES (?, 'run-n', '122001', 29.0, ?, 'night', datetime('now'))
             """,
             (cat_id, night_qty),
