@@ -25,7 +25,7 @@ shaping: true
 | R6 | Answer category questions — white space, competitive landscape, pricing tiers | Must-have |
 | R7 | Built entirely with Claude Agent SDK (custom agents) | Must-have |
 | R8 | Scoped to Gurugram, all pincodes | Must-have |
-| R9 | Buildable in ~10 hours, hackathon pace | Constraint |
+| R9 | Buildable in ~24 hours, hackathon pace | Constraint |
 
 ## Selected Shape: A — Multi-Agent QC Intelligence Pipeline
 
@@ -51,11 +51,11 @@ shaping: true
 | R6 | Category-level analytics | Must-have | ✅ |
 | R7 | Claude Agent SDK agents | Must-have | ✅ |
 | R8 | Gurugram pincodes | Must-have | ✅ |
-| R9 | 10 hours | Constraint | ❌ |
+| R9 | 24 hours | Constraint | ✅ |
 
 **Notes:**
 - R4 fails: A2 mechanism (add-to-cart simulation) is ⚠️ — anti-bot risk per platform unresolved
-- R9 fails: full pipeline with 3 platforms + sales estimation is tight for 10 hours
+- R9: 24-hour timeline gives room for full pipeline implementation
 
 ## Decisions
 
@@ -63,4 +63,5 @@ shaping: true
 - **Agent SDK only**: all agents built with `claude-agent-sdk`
 - **Phase 1 demo**: CLI script, not a dashboard
 - **Risk accepted**: A2 (sales estimation) is high-risk, will attempt anyway
+- **Timeline extended**: 24 hours (was 10), full pipeline now feasible
 - **Competitor ref**: GobbleCube.ai research in `~/Projects/MyNotes/99_Inbox/gobblecube-research.md`

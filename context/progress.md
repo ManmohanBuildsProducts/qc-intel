@@ -1,11 +1,11 @@
 # QC Intel — Progress Log
 
 ## Current State
-- **Last completed:** WS2 (scraper agent layer)
-- **Next up:** WS3 (sales estimation + normalizer agent)
-- **Gate status:** WS2 PASSED
-- **Tests:** 131/131 passing (84 WS0/WS1 + 47 WS2)
-- **Lint:** ruff clean on all WS2 files (0 errors)
+- **Last completed:** WS3 (complete pipeline — all agents + orchestrator + CLI)
+- **Next up:** Integration testing, live scrape testing, polish
+- **Gate status:** WS3 PASSED
+- **Tests:** 167/167 passing (84 WS0/WS1 + 47 WS2 + 36 WS3)
+- **Lint:** ruff clean on all files (0 errors)
 - **Branch:** main
 
 ## Session History
@@ -35,3 +35,13 @@
 - Exports: full __init__.py with all public symbols
 - Tests: 21 parser tests + 6 service tests + 20 agent tests = 47 new tests
 - Gate WS2: PASSED — 131/131 tests, ruff clean, imports verified, parsers produce correct output
+
+### Session 3 — 2026-02-27 (WS3)
+- **Track A** (parallel agent): SalesService — wraps SalesRepository with orchestration + summaries
+- **Track B** (parallel agent): ProductEmbedder (sentence-transformers) + NormalizerService (cross-platform matching via embeddings, Blinkit anchor, Claude validation for ambiguous)
+- **Track C** (parallel agent): AnalyticsService — data preparation + Claude Opus report generation (8 sections)
+- **Track D** (team lead): PipelineOrchestrator — coordinates all stages + run_demo() with fixture seeding
+- **CLI**: analyze.py — argparse with --scrape, --calculate-sales, --normalize, --analyze, --demo, --full-pipeline
+- Execution: 3 parallel agents in git worktrees (A, B, C), Track D on main after merge
+- Tests: 4 sales tests + 12 normalizer tests + 8 analyst tests + 12 orchestrator/CLI tests = 36 new
+- Gate WS3: PASSED — 167/167 tests, ruff clean, all imports verified, demo pipeline seeded + ran
