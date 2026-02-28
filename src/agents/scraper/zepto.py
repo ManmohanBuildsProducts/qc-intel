@@ -1,6 +1,7 @@
 """Zepto scraper — deterministic Playwright-based product extraction."""
 
 import logging
+import re
 
 from mcp import ClientSession
 
@@ -9,6 +10,12 @@ from src.models.product import Platform
 from .base import BaseScraper
 
 logger = logging.getLogger(__name__)
+
+CATEGORY_SEARCH_TERMS = {
+    "Dairy & Bread": ["milk", "curd", "bread", "butter", "cheese", "paneer"],
+    "Fruits & Vegetables": ["vegetables", "fruits", "onion", "potato", "tomato"],
+    "Snacks & Munchies": ["chips", "namkeen", "biscuits", "cookies", "snacks"],
+}
 
 
 class ZeptoScraper(BaseScraper):
@@ -33,118 +40,121 @@ class ZeptoScraper(BaseScraper):
         )
 
     def get_scrape_url(self, pincode: str, category: str) -> str:
-        category_slug = category.lower().replace(" & ", "-").replace(" ", "-")
-        return f"https://www.zeptonow.com/search?query={category_slug.replace('-', '+')}"
+        query = category.lower().replace(" & ", " ")
+        return f"https://www.zeptonow.com/search?query={query.replace(' ', '+')}"
 
-    async def _run_scrape(self, session: ClientSession, pincode: str, category: str) -> list[dict]:
-        """Scrape Zepto: navigate, set location, extract products."""
-        # Step 1: Navigate to Zepto homepage
+    async def _run_scrape(
+        self, session: ClientSession, pincode: str, category: str,
+    ) -> list[dict]:
+        """Scrape Zepto via search: navigate, search terms, extract."""
+        # Step 1: Navigate to homepage
         logger.info("[zepto] Navigating to homepage...")
         await self._navigate(session, "https://www.zeptonow.com")
         await self._wait(session)
 
-        # Step 2: Set pincode via local storage / cookies
-        logger.info("[zepto] Setting pincode %s...", pincode)
-        await self._evaluate(session, (
-            f'() => {{ '
-            f'localStorage.setItem("pincode", "{pincode}"); '
-            f'localStorage.setItem("userPincode", "{pincode}"); '
-            f'return "pincode set"; }}'
-        ))
+        # Step 2: Search for products in this category
+        terms = CATEGORY_SEARCH_TERMS.get(category, [category.lower()])
+        all_items: list[dict] = []
+        seen_names: set[str] = set()
 
-        # Step 3: Navigate to search for this category
-        search_query = category.replace(" & ", " ").replace("  ", " ")
-        url = f"https://www.zeptonow.com/search?query={search_query.replace(' ', '+')}"
-        logger.info("[zepto] Navigating to %s", url)
-        await self._navigate(session, url)
-        await self._wait(session)
-        await self._evaluate(session, '() => { window.scrollTo(0, 1000); return "scrolled"; }')
-        await self._wait(session)
+        for term in terms:
+            url = f"https://www.zeptonow.com/search?query={term}"
+            logger.info("[zepto] Searching: %s", url)
+            await self._navigate(session, url)
+            await self._wait(session)
+            await self._evaluate(
+                session,
+                '() => { window.scrollTo(0, 1000); return "scrolled"; }',
+            )
+            await self._wait(session)
 
-        # Step 4: Extract products from DOM
-        logger.info("[zepto] Extracting products...")
-        result = await self._evaluate(session, """() => {
-            const products = [];
-            // Try various Zepto product card selectors
-            const sel = '[data-testid*="product"],'
-                + ' [class*="ProductCard"], [class*="productCard"],'
-                + ' a[href*="/product/"]';
-            const cards = document.querySelectorAll(sel);
-            for (const card of cards) {
-                const ne = card.querySelector(
-                    '[class*="name"], [class*="Name"],'
-                    + ' [class*="title"], [class*="Title"], h5, h4');
-                const name = ne?.textContent?.trim() || '';
-                const pe = card.querySelector(
-                    '[class*="price"], [class*="Price"],'
-                    + ' [class*="amount"]');
-                const priceText = pe?.textContent?.trim() || '0';
-                const price = parseFloat(priceText.replace(/[^0-9.]/g, '')) || 0;
-                const img = card.querySelector('img')?.src || null;
-                const weightEl = card.querySelector(
-                    '[class*="weight"], [class*="quantity"],'
-                    + ' [class*="unit"], [class*="variant"]');
-                const unit = weightEl?.textContent?.trim() || null;
-                if (name && name.length > 2) {
-                    products.push({
-                        product_id: 'z-' + (products.length + 1),
-                        name: name,
-                        brand_name: null,
-                        category: null,
-                        subcategory: null,
-                        unit_quantity: unit,
-                        discounted_price: price,
-                        mrp: price,
-                        in_stock: true,
-                        max_cart_quantity: 5,
-                        images: img ? [img] : []
-                    });
-                }
-            }
-            return JSON.stringify(products);
-        }""")
-
-        items = self._parse_json_from_evaluate(result)
-
-        # Fallback: snapshot extraction
-        if not items or len(items) == 0:
-            logger.info("[zepto] DOM scraping returned 0, trying snapshot...")
             snapshot = await self._snapshot(session)
             items = self._extract_from_snapshot(snapshot, category)
+            for item in items:
+                name = item.get("name", "")
+                if name and name not in seen_names:
+                    seen_names.add(name)
+                    item["product_id"] = f"z-{len(all_items) + 1}"
+                    all_items.append(item)
 
-        return items if isinstance(items, list) else []
+            logger.info(
+                "[zepto] term=%s found=%d total=%d",
+                term, len(items), len(all_items),
+            )
+
+        return all_items
 
     @staticmethod
-    def _extract_from_snapshot(snapshot: str, category: str) -> list[dict]:
-        """Extract products from accessibility snapshot."""
-        import re
+    def _extract_from_snapshot(
+        snapshot: str, category: str,
+    ) -> list[dict]:
+        """Extract products from Zepto accessibility snapshot.
 
+        Products appear as link blocks with ``/url: /pn/...``.
+        Inside each block: price (₹XX), name, and size generics.
+        """
         products = []
         lines = snapshot.split("\n")
-        for i, line in enumerate(lines):
-            price_match = re.search(r"[₹Rs.]\s*(\d+(?:\.\d+)?)", line)
-            if price_match:
-                price = float(price_match.group(1))
-                for j in range(max(0, i - 3), i):
-                    prev = lines[j].strip()
-                    if any(x in prev.lower() for x in ["search", "login", "cart", "delivery", "ref=", "link"]):
+        i = 0
+        while i < len(lines):
+            # Find product URL marker
+            if "/url: /pn/" in lines[i]:
+                prices: list[float] = []
+                name = None
+                size = None
+
+                # Scan next lines for product data
+                for j in range(i + 1, min(i + 25, len(lines))):
+                    line = lines[j].strip()
+                    # Next product starts
+                    if "/url: /pn/" in line:
+                        break
+
+                    # Price: generic [...]: ₹XX
+                    pm = re.search(r"generic.*:\s*₹(\d+(?:\.\d+)?)\s*$", line)
+                    if pm:
+                        prices.append(float(pm.group(1)))
                         continue
-                    name_match = re.search(r":\s*(.+)", prev)
-                    if name_match:
-                        name = name_match.group(1).strip().strip('"')
-                        if len(name) > 3 and not name.startswith("http"):
-                            products.append({
-                                "product_id": f"z-{len(products) + 1}",
-                                "name": name,
-                                "brand_name": None,
-                                "category": category,
-                                "subcategory": None,
-                                "unit_quantity": None,
-                                "discounted_price": price,
-                                "mrp": price,
-                                "in_stock": True,
-                                "max_cart_quantity": 5,
-                                "images": [],
-                            })
-                            break
+
+                    # Size: contains unit keywords
+                    sm = re.search(
+                        r"generic.*:\s*"
+                        r"(\d+\s*(?:pack|pcs?)?\s*\(.*?\)"
+                        r"|\d+\s*(?:ml|ltr|l|gm|g|kg)\b)",
+                        line, re.IGNORECASE,
+                    )
+                    if sm and not size:
+                        size = sm.group(1) or sm.group(0)
+                        # Clean up: extract just the value
+                        m2 = re.search(r":\s*(.+)$", size)
+                        if m2:
+                            size = m2.group(1).strip()
+                        continue
+
+                    # Name: long generic text (not price, not UI)
+                    nm = re.search(r"generic.*:\s*(.{8,})\s*$", line)
+                    if nm and not name:
+                        val = nm.group(1).strip().strip('"')
+                        skip = ["₹", "(", "OFF", "ADD", "Cart",
+                                "login", "Select", "Search", "Your"]
+                        if not any(val.startswith(s) for s in skip):
+                            name = val
+
+                if name and prices:
+                    price = prices[0]
+                    mrp = prices[1] if len(prices) > 1 else price
+                    products.append({
+                        "product_id": f"z-{len(products) + 1}",
+                        "name": name,
+                        "brand_name": None,
+                        "category": category,
+                        "subcategory": None,
+                        "unit_quantity": size,
+                        "discounted_price": price,
+                        "mrp": mrp,
+                        "in_stock": True,
+                        "max_cart_quantity": 5,
+                        "images": [],
+                    })
+            i += 1
         return products

@@ -58,7 +58,7 @@ class TestPipelineOrchestrator:
         orch = PipelineOrchestrator.__new__(PipelineOrchestrator)
         orch.conn = db_session
 
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.utcnow().strftime("%Y-%m-%d")
         result = orch.run_sales_calculation(today, "122001")
         assert result["records_created"] > 0
 

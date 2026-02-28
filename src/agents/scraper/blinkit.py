@@ -11,11 +11,11 @@ from .base import BaseScraper
 
 logger = logging.getLogger(__name__)
 
-# Blinkit category slugs → internal L2 category IDs
-BLINKIT_CATEGORIES = {
-    "Dairy & Bread": "/cn/dairy-bread-eggs/cid/16/948",
-    "Fruits & Vegetables": "/cn/fresh-vegetables/cid/1487/1489",
-    "Snacks & Munchies": "/cn/snacks-munchies/cid/1512/1514",
+# Search terms per category for broader product coverage
+CATEGORY_SEARCH_TERMS = {
+    "Dairy & Bread": ["milk", "curd", "bread", "butter", "cheese", "paneer"],
+    "Fruits & Vegetables": ["vegetables", "fruits", "onion", "potato", "tomato"],
+    "Snacks & Munchies": ["chips", "namkeen", "biscuits", "cookies", "snacks"],
 }
 
 
@@ -44,14 +44,13 @@ class BlinkitScraper(BaseScraper):
         location = get_pincode_location(pincode)
         lat = location.lat if location else 28.4595
         lng = location.lng if location else 77.0266
-        category_path = BLINKIT_CATEGORIES.get(category)
-        if category_path:
-            return f"https://blinkit.com{category_path}?lat={lat}&lon={lng}"
-        category_slug = category.lower().replace(" & ", "-").replace(" ", "-")
-        return f"https://blinkit.com/cn/{category_slug}?lat={lat}&lon={lng}"
+        query = category.lower().replace(" & ", " ")
+        return f"https://blinkit.com/s/?q={query}&lat={lat}&lon={lng}"
 
-    async def _run_scrape(self, session: ClientSession, pincode: str, category: str) -> list[dict]:
-        """Scrape Blinkit: set location cookies, navigate to category, extract products from DOM."""
+    async def _run_scrape(
+        self, session: ClientSession, pincode: str, category: str,
+    ) -> list[dict]:
+        """Scrape Blinkit via search: set location, search terms, extract."""
         location = get_pincode_location(pincode)
         lat = location.lat if location else 28.4595
         lng = location.lng if location else 77.0266
@@ -62,7 +61,7 @@ class BlinkitScraper(BaseScraper):
         await self._wait(session)
 
         # Step 2: Set location cookies
-        logger.info("[blinkit] Setting location cookies for %s (%.4f, %.4f)", pincode, lat, lng)
+        logger.info("[blinkit] Setting location for %s (%.4f, %.4f)", pincode, lat, lng)
         await self._evaluate(session, (
             f'() => {{ '
             f'document.cookie = "gr_1_lat={lat};path=/;max-age=86400"; '
@@ -72,128 +71,85 @@ class BlinkitScraper(BaseScraper):
             f'return "cookies set"; }}'
         ))
 
-        # Step 3: Navigate to the category page
-        url = self.get_scrape_url(pincode, category)
-        logger.info("[blinkit] Navigating to %s", url)
-        await self._navigate(session, url)
-        await self._wait(session)
+        # Step 3: Search for products in this category
+        terms = CATEGORY_SEARCH_TERMS.get(category, [category.lower()])
+        all_items: list[dict] = []
+        seen_names: set[str] = set()
 
-        # Step 4: Scroll to load products and wait
-        await self._evaluate(session, '() => { window.scrollTo(0, 1000); return "scrolled"; }')
-        await self._wait(session)
+        for term in terms:
+            url = f"https://blinkit.com/s/?q={term}&lat={lat}&lon={lng}"
+            logger.info("[blinkit] Searching: %s", url)
+            await self._navigate(session, url)
+            await self._wait(session)
+            await self._evaluate(
+                session,
+                '() => { window.scrollTo(0, 1000); return "scrolled"; }',
+            )
+            await self._wait(session)
 
-        # Step 5: Extract product data from DOM
-        logger.info("[blinkit] Extracting products from page...")
-        result = await self._evaluate(session, """() => {
-            const products = [];
-            const sel = '[data-testid="plp-product"],'
-                + ' .Product__UpdatedPlpProductContainer-sc-11dk8zk-0,'
-                + ' div[class*="Product__"]';
-            const cards = document.querySelectorAll(sel);
-            if (cards.length === 0) {
-                // Try alternative selectors
-                const allDivs = document.querySelectorAll('div');
-                for (const div of allDivs) {
-                    const nameEl = div.querySelector('div[class*="name"], div[class*="Name"]');
-                    const priceEl = div.querySelector('div[class*="price"], div[class*="Price"]');
-                    if (nameEl && priceEl) {
-                        const name = nameEl.textContent.trim();
-                        const priceText = priceEl.textContent.trim();
-                        const price = parseFloat(priceText.replace(/[^0-9.]/g, '')) || 0;
-                        if (name && name.length > 2 && price > 0) {
-                            products.push({
-                                id: products.length + 1,
-                                name: name,
-                                brand: null,
-                                category: null,
-                                subcategory: null,
-                                unit: null,
-                                price: price,
-                                mrp: price,
-                                available: true,
-                                max_allowed_quantity: 5,
-                                image_url: null
-                            });
-                        }
-                    }
-                    if (products.length >= 50) break;
-                }
-            } else {
-                for (const card of cards) {
-                    const name = card.querySelector('[class*="name"], [class*="Name"]')?.textContent?.trim() || '';
-                    const pe = card.querySelector('[class*="price"], [class*="Price"]');
-                    const priceText = pe?.textContent?.trim() || '0';
-                    const price = parseFloat(priceText.replace(/[^0-9.]/g, '')) || 0;
-                    const img = card.querySelector('img')?.src || null;
-                    if (name) {
-                        products.push({
-                            id: products.length + 1,
-                            name: name,
-                            brand: null,
-                            category: null,
-                            subcategory: null,
-                            unit: null,
-                            price: price,
-                            mrp: price,
-                            available: true,
-                            max_allowed_quantity: 5,
-                            image_url: img
-                        });
-                    }
-                }
-            }
-            return JSON.stringify(products);
-        }""")
-
-        items = self._parse_json_from_evaluate(result)
-
-        # If DOM scraping failed, try snapshot-based extraction
-        if not items or len(items) == 0:
-            logger.info("[blinkit] DOM scraping returned 0, trying snapshot extraction...")
+            # Extract from snapshot (more reliable than DOM selectors)
             snapshot = await self._snapshot(session)
-            items = self._extract_products_from_snapshot(snapshot, category)
+            items = self._extract_products_from_snapshot(
+                snapshot, category,
+            )
+            for item in items:
+                name = item.get("name", "")
+                if name and name not in seen_names:
+                    seen_names.add(name)
+                    item["id"] = len(all_items) + 1
+                    all_items.append(item)
 
-        return items if isinstance(items, list) else []
+            logger.info(
+                "[blinkit] term=%s found=%d total=%d",
+                term, len(items), len(all_items),
+            )
+
+        return all_items
 
     @staticmethod
-    def _extract_products_from_snapshot(snapshot: str, category: str) -> list[dict]:
-        """Extract product info from accessibility snapshot YAML text."""
+    def _extract_products_from_snapshot(
+        snapshot: str, category: str,
+    ) -> list[dict]:
+        """Extract products from accessibility snapshot.
+
+        Blinkit search results appear as button elements with text like:
+        ``"8 mins Mother Dairy Cow Milk 500 ml ₹30 ADD"``
+        """
         import re
 
+        # Pattern: "N mins <name> <size> ₹<price> [₹<mrp>] ADD"
+        pattern = re.compile(
+            r'button\s+"(\d+)\s+mins?\s+'  # ETA
+            r'(.+?)\s+'                     # product name
+            r'([\d.,]+\s*(?:ml|ltr|l|gm|g|kg|pcs?|pack)\b'
+            r'(?:\s*x\s*[\d.,]+\s*'
+            r'(?:ml|ltr|l|gm|g|kg|pcs?|pack))?)\s+'  # size
+            r'₹(\d+(?:\.\d+)?)'            # price
+            r'(?:\s+₹(\d+(?:\.\d+)?))?'    # optional MRP
+            r'\s+ADD"',
+            re.IGNORECASE,
+        )
+
         products = []
-        # Look for product-like patterns: name followed by price (₹XX)
-        lines = snapshot.split("\n")
-        i = 0
-        while i < len(lines):
-            line = lines[i].strip()
-            # Match price pattern ₹XX or Rs XX
-            price_match = re.search(r"[₹Rs.]\s*(\d+(?:\.\d+)?)", line)
-            if price_match and i > 0:
-                price = float(price_match.group(1))
-                # Look back for a product name (text without price that's not a UI element)
-                for j in range(max(0, i - 3), i):
-                    prev = lines[j].strip()
-                    # Skip UI chrome
-                    skip = ["search", "login", "cart", "delivery", "ref=", "link", "button"]
-                    if any(x in prev.lower() for x in skip):
-                        continue
-                    name_match = re.search(r":\s*(.+)", prev)
-                    if name_match:
-                        name = name_match.group(1).strip().strip('"')
-                        if len(name) > 3 and not name.startswith("http"):
-                            products.append({
-                                "id": len(products) + 1,
-                                "name": name,
-                                "brand": None,
-                                "category": category,
-                                "subcategory": None,
-                                "unit": None,
-                                "price": price,
-                                "mrp": price,
-                                "available": True,
-                                "max_allowed_quantity": 5,
-                                "image_url": None,
-                            })
-                            break
-            i += 1
+        for match in pattern.finditer(snapshot):
+            name = match.group(2).strip()
+            size = match.group(3).strip()
+            price = float(match.group(4))
+            mrp_str = match.group(5)
+            mrp = float(mrp_str) if mrp_str else price
+
+            products.append({
+                "id": len(products) + 1,
+                "name": name,
+                "brand": None,
+                "category": category,
+                "subcategory": None,
+                "unit": size,
+                "price": price,
+                "mrp": mrp,
+                "available": True,
+                "max_allowed_quantity": 5,
+                "image_url": None,
+            })
+
         return products

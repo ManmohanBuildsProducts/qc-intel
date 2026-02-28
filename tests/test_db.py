@@ -275,7 +275,7 @@ class TestSalesRepository:
     def test_normal_delta_high_confidence(self, db_conn: sqlite3.Connection) -> None:
         self._setup_morning_night(db_conn, morning_qty=20, night_qty=5)
         repo = SalesRepository(db_conn)
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.utcnow().strftime("%Y-%m-%d")
         count = repo.calculate_and_store_daily_sales(today, "122001")
         assert count == 1
 
@@ -288,7 +288,7 @@ class TestSalesRepository:
     def test_zero_sales_medium_confidence(self, db_conn: sqlite3.Connection) -> None:
         self._setup_morning_night(db_conn, morning_qty=10, night_qty=10)
         repo = SalesRepository(db_conn)
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.utcnow().strftime("%Y-%m-%d")
         count = repo.calculate_and_store_daily_sales(today, "122001")
         assert count == 1
 
@@ -299,7 +299,7 @@ class TestSalesRepository:
     def test_restock_low_confidence(self, db_conn: sqlite3.Connection) -> None:
         self._setup_morning_night(db_conn, morning_qty=5, night_qty=15)
         repo = SalesRepository(db_conn)
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.utcnow().strftime("%Y-%m-%d")
         count = repo.calculate_and_store_daily_sales(today, "122001")
         assert count == 1
 
@@ -318,14 +318,14 @@ class TestScrapeRunRepository:
             pincode="122001",
             category="Dairy & Bread",
             time_of_day=TimeOfDay.MORNING,
-            started_at=datetime.now(),
+            started_at=datetime.utcnow(),
         )
         rid = repo.create_run(run)
         assert rid == "run-001"
 
         repo.complete_run("run-001", products_found=25, errors=2)
 
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.utcnow().strftime("%Y-%m-%d")
         runs = repo.get_runs_by_date(today)
         assert len(runs) == 1
         assert runs[0].status == ScrapeRunStatus.COMPLETED
@@ -340,12 +340,12 @@ class TestScrapeRunRepository:
             pincode="122002",
             category="Dairy & Bread",
             time_of_day=TimeOfDay.NIGHT,
-            started_at=datetime.now(),
+            started_at=datetime.utcnow(),
         )
         repo.create_run(run)
         repo.fail_run("run-002", errors=5)
 
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.utcnow().strftime("%Y-%m-%d")
         runs = repo.get_runs_by_date(today)
         failed = [r for r in runs if r.id == "run-002"]
         assert len(failed) == 1

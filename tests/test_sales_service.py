@@ -62,7 +62,7 @@ class TestCalculateDailySales:
         _seed_observations(obs_repo, product_id, morning_qty=20, night_qty=5)
 
         service = SalesService(db_session)
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.utcnow().strftime("%Y-%m-%d")
         result = service.calculate_daily_sales(today)
 
         assert result["records_created"] == 1
@@ -85,7 +85,7 @@ class TestCategorySalesSummary:
         _seed_observations(obs_repo, md_id, morning_qty=30, night_qty=2)
 
         service = SalesService(db_session)
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.utcnow().strftime("%Y-%m-%d")
         service.calculate_daily_sales(today)
 
         summary = service.get_category_sales_summary("Dairy & Bread", today)
@@ -102,7 +102,7 @@ class TestNoObservations:
     def test_no_observations(self, db_session: sqlite3.Connection) -> None:
         """Empty DB should produce zero records and zero sales."""
         service = SalesService(db_session)
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.utcnow().strftime("%Y-%m-%d")
         result = service.calculate_daily_sales(today)
 
         assert result["records_created"] == 0
@@ -119,7 +119,7 @@ class TestRestockDetection:
         _seed_observations(obs_repo, product_id, morning_qty=5, night_qty=15)
 
         service = SalesService(db_session)
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.utcnow().strftime("%Y-%m-%d")
         result = service.calculate_daily_sales(today)
 
         assert result["records_created"] == 1

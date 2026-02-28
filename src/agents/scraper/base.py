@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 PLAYWRIGHT_SERVER = StdioServerParameters(
     command="npx",
-    args=["@playwright/mcp@latest"],
+    args=["@playwright/mcp@latest", "--browser", "firefox", "--headless"],
 )
 
 ALLOWED_TOOLS = {

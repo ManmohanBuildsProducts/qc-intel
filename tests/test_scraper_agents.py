@@ -14,6 +14,7 @@ class TestBaseScraper:
     def test_playwright_server_config(self, db_session: sqlite3.Connection) -> None:
         assert PLAYWRIGHT_SERVER.command == "npx"
         assert "@playwright/mcp@latest" in PLAYWRIGHT_SERVER.args
+        assert "firefox" in PLAYWRIGHT_SERVER.args
 
     def test_allowed_tools(self, db_session: sqlite3.Connection) -> None:
         assert "browser_navigate" in ALLOWED_TOOLS
@@ -52,7 +53,7 @@ class TestBlinkitScraper:
         assert "blinkit.com" in url
         assert "lat=" in url
         assert "lon=" in url
-        assert "dairy-bread" in url
+        assert "/s/?q=" in url
 
     def test_url_with_known_pincode(self, db_session: sqlite3.Connection) -> None:
         scraper = BlinkitScraper(db_session)
@@ -60,10 +61,10 @@ class TestBlinkitScraper:
         assert "28.4595" in url
         assert "77.0266" in url
 
-    def test_url_uses_category_id_for_known_categories(self, db_session: sqlite3.Connection) -> None:
+    def test_url_uses_search(self, db_session: sqlite3.Connection) -> None:
         scraper = BlinkitScraper(db_session)
         url = scraper.get_scrape_url("122001", "Dairy & Bread")
-        assert "/cid/" in url
+        assert "/s/?q=dairy" in url
 
 
 class TestZeptoScraper:
