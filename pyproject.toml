@@ -22,6 +22,7 @@ dev = ["pytest", "pytest-asyncio", "ruff"]
 [tool.ruff]
 target-version = "py312"
 line-length = 120
+exclude = ["eval/"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]

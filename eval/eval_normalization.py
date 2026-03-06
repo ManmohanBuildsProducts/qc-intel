@@ -447,7 +447,7 @@ def main() -> None:
     args = parser.parse_args()
 
     run_all = not (args.fast or args.sweep or args.llm_judge)
-    thresholds = [0.70, 0.75, 0.80, 0.85, 0.90]
+    thresholds = [0.75, 0.80, 0.85, 0.90, 0.95]
 
     sweep_results = _SKIP
     llm_results = _SKIP

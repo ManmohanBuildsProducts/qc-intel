@@ -1,10 +1,10 @@
 # QC Intel — Progress Log
 
 ## Current State
-- **Last completed:** WS4 (frontend analytics dashboard — FastAPI API + Next.js UI)
-- **Next up:** Live scrape testing, deployment, production polish
-- **Gate status:** WS4 PASSED
-- **Tests:** 183/183 passing (84 WS0/WS1 + 47 WS2 + 36 WS3 + 16 WS4)
+- **Last completed:** WS5 (eval harness, threshold tuning, deployment config)
+- **Next up:** Live scrape end-to-end test on real platforms
+- **Gate status:** WS5 PASSED
+- **Tests:** 184/184 passing (+ eval harness added)
 - **Lint:** ruff clean on all files (0 errors), TypeScript clean
 - **Branch:** main
 
@@ -55,3 +55,17 @@
 - Dependencies added: fastapi, httpx, @tailwindcss/typography, chart.js, react-chartjs-2, react-markdown
 - Tests: 16 new API tests (health, brands, categories, products, dashboard stats, charts, reports with mocked Claude)
 - Gate WS4: PASSED — 183/183 tests, ruff clean, tsc clean, Next.js build clean
+
+### Session 5 — 2026-03-06 (WS5: eval + threshold + deployment)
+- **Eval harness**: `eval/eval_normalization.py` — 3-strategy automated normalization eval
+  - Strategy 1: fixture ground truth sweep (P/R/F1 across 5 thresholds, single embedding pass)
+  - Strategy 2: LLM-as-judge on live DB ambiguous pairs (async Gemini, --fix deletes bad mappings)
+  - Strategy 3: rule-based (unit conflicts, oversized clusters, low Jaccard)
+  - CLI: `--fast`, `--sweep`, `--llm-judge [--fix]`
+- **Bug fixes** (`normalizer.py`): `max_output_tokens=10` → 200 for gemini-2.5-flash; guard `response.text or ""`
+- **Threshold tuning**: `AMBIGUOUS_LOWER_THRESHOLD` raised 0.70 → 0.80 (eval-backed)
+- **DB note**: Live DB has 353 canonicals — extra 62 are legitimate single-platform products, not fragmentation
+- **Deployment**: `Dockerfile`, `.dockerignore`, `docker-compose.yml`, `railway.toml`, `.env.example`
+- **CORS**: `api/main.py` now reads allowed origins from `QC_ALLOWED_ORIGINS` env var
+- **Scraper verification**: 48/48 scraper tests pass
+- Gate WS5: PASSED — 184/184 tests, ruff clean, deployment files complete

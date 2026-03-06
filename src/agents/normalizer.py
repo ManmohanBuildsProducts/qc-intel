@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 # Thresholds
 HIGH_CONFIDENCE_THRESHOLD = 0.85
-AMBIGUOUS_LOWER_THRESHOLD = 0.70
+AMBIGUOUS_LOWER_THRESHOLD = 0.80
 
 
 class NormalizerService:
