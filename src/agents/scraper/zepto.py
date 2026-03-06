@@ -41,27 +41,51 @@ class ZeptoScraper(BaseScraper):
 
     def get_scrape_url(self, pincode: str, category: str) -> str:
         query = category.lower().replace(" & ", " ")
-        return f"https://www.zeptonow.com/search?query={query.replace(' ', '+')}"
+        return f"https://www.zepto.com/search?query={query.replace(' ', '+')}"
 
     async def _run_scrape(
         self, session: ClientSession, pincode: str, category: str,
     ) -> list[dict]:
-        """Scrape Zepto via search: navigate, search terms, extract."""
-        # Step 1: Navigate to homepage
+        """Scrape Zepto via search: navigate, set location, click to load, extract."""
+        # Step 1: Navigate to homepage and set Gurugram location
         logger.info("[zepto] Navigating to homepage...")
-        await self._navigate(session, "https://www.zeptonow.com")
+        await self._navigate(session, "https://www.zepto.com")
         await self._wait(session)
+        await self._evaluate(session, (
+            '() => { '
+            'const pos = {state: {userPosition: {'
+            'lat: 28.4595, lng: 77.0266, pincode: "122001", '
+            'city: "Gurugram", address: "Gurugram, Haryana"'
+            '}, _hasHydrated: true}, version: 0}; '
+            'localStorage.setItem("user-position", JSON.stringify(pos)); '
+            'return "location set"; }'
+        ))
 
         # Step 2: Search for products in this category
         terms = CATEGORY_SEARCH_TERMS.get(category, [category.lower()])
         all_items: list[dict] = []
         seen_names: set[str] = set()
+        location_clicked = False
 
         for term in terms:
-            url = f"https://www.zeptonow.com/search?query={term}"
+            url = f"https://www.zepto.com/search?query={term}"
             logger.info("[zepto] Searching: %s", url)
             await self._navigate(session, url)
             await self._wait(session)
+            # First search: click "Select Location" to trigger product loading
+            if not location_clicked:
+                snap = await self._snapshot(session)
+                if "Select Location" in snap:
+                    logger.info("[zepto] Clicking Select Location to load products")
+                    try:
+                        await session.call_tool(
+                            "browser_click",
+                            {"element": "Select Location button", "ref": ""},
+                        )
+                        location_clicked = True
+                        await self._wait(session)
+                    except Exception as e:
+                        logger.warning("[zepto] Could not click Select Location: %s", e)
             await self._evaluate(
                 session,
                 '() => { window.scrollTo(0, 1000); return "scrolled"; }',
@@ -90,71 +114,70 @@ class ZeptoScraper(BaseScraper):
     ) -> list[dict]:
         """Extract products from Zepto accessibility snapshot.
 
-        Products appear as link blocks with ``/url: /pn/...``.
-        Inside each block: price (₹XX), name, and size generics.
+        Products appear as link elements with text:
+        ``"NAME ADD [ad?] ₹price [₹mrp] [₹X OFF] NAME size rating (reviews)"``
+        followed by ``/url: /pn/<slug>/pvid/<uuid>``
         """
         products = []
         lines = snapshot.split("\n")
-        i = 0
-        while i < len(lines):
-            # Find product URL marker
-            if "/url: /pn/" in lines[i]:
-                prices: list[float] = []
-                name = None
-                size = None
 
-                # Scan next lines for product data
-                for j in range(i + 1, min(i + 25, len(lines))):
-                    line = lines[j].strip()
-                    # Next product starts
-                    if "/url: /pn/" in line:
-                        break
+        for i, line in enumerate(lines):
+            # Find product URL lines
+            if "/url: /pn/" not in line:
+                continue
 
-                    # Price: generic [...]: ₹XX
-                    pm = re.search(r"generic.*:\s*₹(\d+(?:\.\d+)?)\s*$", line)
-                    if pm:
-                        prices.append(float(pm.group(1)))
-                        continue
+            # Extract product_id (pvid)
+            pvid_m = re.search(r"/pvid/([a-f0-9-]+)", line)
+            product_id = pvid_m.group(1) if pvid_m else f"z-{len(products) + 1}"
 
-                    # Size: contains unit keywords
-                    sm = re.search(
-                        r"generic.*:\s*"
-                        r"(\d+\s*(?:pack|pcs?)?\s*\(.*?\)"
-                        r"|\d+\s*(?:ml|ltr|l|gm|g|kg)\b)",
-                        line, re.IGNORECASE,
-                    )
-                    if sm and not size:
-                        size = sm.group(1) or sm.group(0)
-                        # Clean up: extract just the value
-                        m2 = re.search(r":\s*(.+)$", size)
-                        if m2:
-                            size = m2.group(1).strip()
-                        continue
+            # Find the link text in the preceding lines (within 3 lines)
+            link_text = None
+            for j in range(max(0, i - 3), i):
+                m = re.search(r'link "(.+?)" \[ref=', lines[j])
+                if m and "ADD" in m.group(1) and "₹" in m.group(1):
+                    link_text = m.group(1)
+                    break
+            if not link_text:
+                continue
 
-                    # Name: long generic text (not price, not UI)
-                    nm = re.search(r"generic.*:\s*(.{8,})\s*$", line)
-                    if nm and not name:
-                        val = nm.group(1).strip().strip('"')
-                        skip = ["₹", "(", "OFF", "ADD", "Cart",
-                                "login", "Select", "Search", "Your"]
-                        if not any(val.startswith(s) for s in skip):
-                            name = val
+            # Remove ad image references (e.g. "P3 - Ad.png")
+            text = re.sub(r"P\d+\s*-\s*Ad\.png\s*", "", link_text)
 
-                if name and prices:
-                    price = prices[0]
-                    mrp = prices[1] if len(prices) > 1 else price
-                    products.append({
-                        "product_id": f"z-{len(products) + 1}",
-                        "name": name,
-                        "brand_name": None,
-                        "category": category,
-                        "subcategory": None,
-                        "unit_quantity": size,
-                        "discounted_price": price,
-                        "mrp": mrp,
-                        "in_stock": True,
-                        "max_cart_quantity": 5,
-                        "images": [],
-                    })
-            i += 1
+            # Extract name: everything before " ADD"
+            name_m = re.match(r"^(.+?)\s+ADD\b", text)
+            if not name_m:
+                continue
+            name = name_m.group(1).strip()
+
+            # Extract all ₹XX values; filter out "₹X OFF" discount amounts
+            # Remove "₹X OFF" to avoid counting them as prices
+            text_no_off = re.sub(r"₹\d+(?:\.\d+)?\s+OFF", "", text)
+            prices = [float(p) for p in re.findall(r"₹(\d+(?:\.\d+)?)", text_no_off)]
+            if not prices:
+                continue
+            discounted = prices[0]
+            mrp = prices[1] if len(prices) > 1 else discounted
+
+            # Extract size: "N pack (X ml/g/L)" or "N pc (X ml)" patterns
+            size_m = re.search(
+                r"(\d+\s*(?:pack|pc|pcs|pieces?)\s*\([^)]+\)"
+                r"|\d+\s*(?:ml|g|kg|l|ltr)\b)",
+                text, re.IGNORECASE,
+            )
+            size = size_m.group(0).strip() if size_m else None
+
+            products.append({
+                "product_id": product_id,
+                "name": name,
+                "brand_name": None,
+                "category": category,
+                "subcategory": None,
+                "unit_quantity": size,
+                "discounted_price": discounted,
+                "mrp": mrp,
+                "in_stock": True,
+                "max_cart_quantity": 5,
+                "images": [],
+            })
+
         return products

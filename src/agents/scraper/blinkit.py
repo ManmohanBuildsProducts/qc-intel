@@ -117,9 +117,9 @@ class BlinkitScraper(BaseScraper):
         """
         import re
 
-        # Pattern: "N mins <name> <size> ₹<price> [₹<mrp>] ADD"
+        # Pattern: "[N% OFF] N mins <name> <size> ₹<price> [₹<mrp>] ADD"
         pattern = re.compile(
-            r'button\s+"(\d+)\s+mins?\s+'  # ETA
+            r'button\s+"(?:\d+%?\s+OFF\s+)?(\d+)\s+mins?\s+'  # optional % OFF + ETA
             r'(.+?)\s+'                     # product name
             r'([\d.,]+\s*(?:ml|ltr|l|gm|g|kg|pcs?|pack)\b'
             r'(?:\s*x\s*[\d.,]+\s*'

@@ -80,7 +80,7 @@ class TestZeptoScraper:
     def test_url_pattern(self, db_session: sqlite3.Connection) -> None:
         scraper = ZeptoScraper(db_session)
         url = scraper.get_scrape_url("122001", "Dairy & Bread")
-        assert "zeptonow.com" in url
+        assert "zepto.com" in url
         assert "dairy" in url.lower()
 
 

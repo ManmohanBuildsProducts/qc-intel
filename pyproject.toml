@@ -4,13 +4,16 @@ version = "0.1.0"
 description = "Quick commerce intelligence platform — scrape, estimate, normalize, analyze"
 requires-python = ">=3.12"
 dependencies = [
-    "claude-agent-sdk",
-    "anthropic",
+    "google-genai>=1.0",
+    "mcp>=1.0",
     "sentence-transformers",
     "numpy",
     "scikit-learn",
     "pydantic>=2.0",
     "pydantic-settings",
+    "fastapi",
+    "uvicorn[standard]",
+    "httpx",
 ]
 
 [project.optional-dependencies]

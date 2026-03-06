@@ -3,11 +3,18 @@
 import logging
 import re
 
-from mcp import ClientSession
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
 
-from src.models.product import Platform
+from src.models.product import Platform, ScrapeRun, TimeOfDay
 
 from .base import BaseScraper
+
+# Use Chromium for Instamart — Swiggy's WAF blocks headless Firefox
+INSTAMART_PLAYWRIGHT_SERVER = StdioServerParameters(
+    command="npx",
+    args=["@playwright/mcp@latest", "--browser", "chromium", "--headless"],
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,41 +53,89 @@ class InstamartScraper(BaseScraper):
             f"?custom_back=true&query={query.replace(' ', '+')}"
         )
 
+    async def scrape(self, pincode: str, category: str, time_of_day: TimeOfDay) -> ScrapeRun:
+        """Override to use Chromium — less detectable by Swiggy's WAF than Firefox."""
+        async with stdio_client(INSTAMART_PLAYWRIGHT_SERVER) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                try:
+                    items = await self._run_scrape(session, pincode, category)
+                finally:
+                    try:
+                        await session.call_tool("browser_close", {})
+                    except Exception:
+                        pass
+
+        if not items:
+            from src.models.exceptions import ScrapeError
+            raise ScrapeError(self.platform.value, "Scraper returned no products")
+
+        logger.info(
+            "[%s] Scraped %d products for %s/%s",
+            self.platform.value, len(items), pincode, category,
+        )
+        return self.service.process_scrape_results(
+            items, self.platform, pincode, category, time_of_day,
+        )
+
     async def _run_scrape(
         self, session: ClientSession, pincode: str, category: str,
     ) -> list[dict]:
-        """Scrape Instamart via search: navigate, search terms, extract."""
-        # Step 1: Navigate to Swiggy homepage first (establish session)
-        logger.info("[instamart] Navigating to Swiggy...")
+        """Scrape Instamart: establish session, call POST search API, fallback to snapshot."""
+        # Step 1: Navigate to Swiggy homepage to establish session cookies
+        logger.info("[instamart] Navigating to Swiggy homepage...")
         await self._navigate(session, "https://www.swiggy.com")
         await self._wait(session)
 
-        # Step 2: Navigate to Instamart
+        # Step 2: Navigate to Instamart to pick up store/location context
         logger.info("[instamart] Navigating to Instamart...")
         await self._navigate(session, "https://www.swiggy.com/instamart")
         await self._wait(session)
 
-        # Step 3: Search for products in this category
         terms = CATEGORY_SEARCH_TERMS.get(category, [category.lower()])
         all_items: list[dict] = []
         seen_names: set[str] = set()
 
         for term in terms:
-            url = (
-                f"https://www.swiggy.com/instamart/search"
-                f"?custom_back=true&query={term}"
-            )
-            logger.info("[instamart] Searching: %s", url)
-            await self._navigate(session, url)
-            await self._wait(session)
-            await self._evaluate(
-                session,
-                '() => { window.scrollTo(0, 1000); return "scrolled"; }',
-            )
-            await self._wait(session)
+            logger.info("[instamart] Searching: %s", term)
 
-            snapshot = await self._snapshot(session)
-            items = self._extract_from_snapshot(snapshot, category)
+            # Primary: call search API from within the page (session cookies sent automatically)
+            js = (
+                f'async () => {{ '
+                f'try {{ '
+                f'const r = await fetch('
+                f'"/api/instamart/search/v2?offset=0&ageConsent=false'
+                f'&pageType=INSTAMART_AUTO_SUGGEST_SEARCH_PAGE",'
+                f'{{method:"POST",'
+                f'headers:{{"Content-Type":"application/json",'
+                f'"__fetch_req_type__":"data"}},'
+                f'body:JSON.stringify({{query:"{term}",offset:0}})}}'
+                f'); '
+                f'const d = await r.json(); '
+                f'return JSON.stringify(d); '
+                f'}} catch(e) {{ return "ERROR:" + e.message; }} }}'
+            )
+            raw = await self._evaluate(session, js)
+            parsed = self._parse_json_from_evaluate(raw)
+
+            items: list[dict] = []
+            if parsed and isinstance(parsed, dict):
+                items = self._extract_from_api_response(parsed, category)
+                logger.info("[instamart] API extraction: %d items for '%s'", len(items), term)
+
+            if not items:
+                # Fallback: navigate to search page and parse snapshot
+                url = f"https://www.swiggy.com/instamart/search?custom_back=true&query={term}"
+                await self._navigate(session, url)
+                await self._wait(session)
+                await self._evaluate(
+                    session, '() => { window.scrollTo(0, 1000); return "scrolled"; }',
+                )
+                await self._wait(session)
+                snapshot = await self._snapshot(session)
+                items = self._extract_from_snapshot(snapshot, category)
+                logger.info("[instamart] Snapshot fallback: %d items for '%s'", len(items), term)
+
             for item in items:
                 name = item.get("name", "")
                 if name and name not in seen_names:
@@ -96,12 +151,50 @@ class InstamartScraper(BaseScraper):
         return all_items
 
     @staticmethod
+    def _extract_from_api_response(data: dict, category: str) -> list[dict]:
+        """Extract products from Instamart search API JSON response.
+
+        API returns: data.data.widgets[].data.products[].product
+        """
+        products = []
+        widgets = data.get("data", {}).get("widgets", []) or []
+        for widget in widgets:
+            if not isinstance(widget, dict):
+                continue
+            raw_products = widget.get("data", {}).get("products", []) or []
+            for p in raw_products:
+                if not isinstance(p, dict):
+                    continue
+                prod = p.get("product", p)
+                name = prod.get("name") or prod.get("display_name", "")
+                if not name:
+                    continue
+                pricing = prod.get("pricing") or {}
+                price = float(pricing.get("offer_price") or pricing.get("price") or 0)
+                mrp = float(pricing.get("mrp") or price)
+                cat_info = prod.get("category") or {}
+                products.append({
+                    "id": f"im-{len(products) + 1}",
+                    "name": name,
+                    "brand": prod.get("brand_name"),
+                    "category": category,
+                    "subcategory": cat_info.get("name") if isinstance(cat_info, dict) else None,
+                    "packSize": prod.get("weight") or prod.get("quantity"),
+                    "price": price,
+                    "totalPrice": mrp,
+                    "inStock": prod.get("in_stock", True),
+                    "maxSelectableQuantity": prod.get("max_selectable_quantity", 5),
+                    "images": [],
+                })
+        return products
+
+    @staticmethod
     def _extract_from_snapshot(
         snapshot: str, category: str,
     ) -> list[dict]:
-        """Extract products from Instamart accessibility snapshot.
+        """Fallback: extract products from Instamart accessibility snapshot.
 
-        Scans for price patterns (₹XX) and nearby product names.
+        Scans for price patterns (₹XX) and nearby product name lines.
         """
         products = []
         lines = snapshot.split("\n")
