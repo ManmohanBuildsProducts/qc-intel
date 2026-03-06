@@ -149,7 +149,7 @@ class NormalizerService:
                 f"Product B: {product_b.name} ({product_b.brand}, {product_b.unit})\n"
                 f"Similarity score: {similarity:.2f}"
             ),
-            config=genai_types.GenerateContentConfig(max_output_tokens=10),
+            config=genai_types.GenerateContentConfig(max_output_tokens=200),
         )
-        answer = response.text.strip().upper()
+        answer = (response.text or "").strip().upper()
         return answer.startswith("YES")
