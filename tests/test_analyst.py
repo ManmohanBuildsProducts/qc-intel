@@ -123,7 +123,8 @@ class TestGenerateReport:
         assert report.platform_count == 0
         assert Path(report.report_path).exists()
         content = Path(report.report_path).read_text()
-        assert "No data available" in content
+        # Opportunity analysis mode: generates insights even with no brand data
+        assert len(content) > 100
 
 
 class TestReportSaving:
@@ -136,7 +137,7 @@ class TestReportSaving:
         assert "# Test Report" in content
 
 
-class TestFormatDataForClaude:
+class TestFormatDataForGemini:
     def test_format_includes_brand_info(self, db_session: sqlite3.Connection) -> None:
         analytics = AnalyticsService(db_session)
         data = {
@@ -150,7 +151,7 @@ class TestFormatDataForClaude:
             "competitor_prices": [],
             "cross_platform_products": [],
         }
-        result = analytics._format_data_for_claude(data)
+        result = analytics._format_data_for_gemini(data)
         assert "Amul" in result
         assert "Dairy & Bread" in result
         assert "blinkit" in result
@@ -173,7 +174,7 @@ class TestFormatDataForClaude:
             ],
             "cross_platform_products": [],
         }
-        result = analytics._format_data_for_claude(data)
+        result = analytics._format_data_for_gemini(data)
         assert "29.0" in result
         assert "In Stock" in result
         assert "MD Milk" in result

@@ -50,6 +50,7 @@ export interface ReportResponse {
   sections: string[];
   product_count: number;
   platform_count: number;
+  is_opportunity_mode: boolean;
 }
 
 export interface ApiResponse<T> {

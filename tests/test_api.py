@@ -231,13 +231,21 @@ class TestReports:
         ]
 
     def test_generate_report_no_data(self, client: TestClient) -> None:
-        """Report for unknown brand should still return 200 with empty-data report."""
-        resp = client.post(
-            "/api/reports/generate",
-            json={"brand": "UnknownBrand", "category": "Dairy & Bread"},
-        )
+        """Unknown brand triggers opportunity analysis mode via Gemini."""
+        mock_response = MagicMock()
+        mock_response.text = "## Executive Summary\nOpportunity analysis for UnknownBrand."
+
+        with patch("src.agents.analyst.genai.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+            mock_client_cls.return_value = mock_client
+            resp = client.post(
+                "/api/reports/generate",
+                json={"brand": "UnknownBrand", "category": "Dairy & Bread"},
+            )
         assert resp.status_code == 200
         data = resp.json()["data"]
         assert data["product_count"] == 0
         assert data["platform_count"] == 0
-        assert "No data available" in data["content"]
+        assert data["is_opportunity_mode"] is True
+        assert len(data["content"]) > 0

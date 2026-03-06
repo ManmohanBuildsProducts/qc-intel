@@ -62,6 +62,7 @@ class ReportData(BaseModel):
     sections: list[str]
     product_count: int
     platform_count: int
+    is_opportunity_mode: bool = False
 
 
 class ApiResponse(BaseModel):

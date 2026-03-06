@@ -34,5 +34,6 @@ async def generate_report(
         sections=report.sections,
         product_count=report.product_count,
         platform_count=report.platform_count,
+        is_opportunity_mode=report.product_count == 0,
     )
     return ApiResponse(data=data.model_dump())
