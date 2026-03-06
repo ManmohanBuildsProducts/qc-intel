@@ -22,7 +22,13 @@ logger = logging.getLogger(__name__)
 CATEGORY_SEARCH_TERMS = {
     "Dairy & Bread": ["milk", "curd", "bread", "butter", "cheese", "paneer"],
     "Fruits & Vegetables": ["vegetables", "fruits", "onion", "potato", "tomato"],
-    "Snacks & Munchies": ["chips", "namkeen", "biscuits", "cookies", "snacks"],
+    "Snacks & Munchies": ["chips", "namkeen", "popcorn", "peanuts", "snacks"],
+    "Beverages": ["cold drinks", "juice", "energy drink", "soda", "coconut water"],
+    "Atta & Staples": ["atta", "rice", "dal", "maida", "besan"],
+    "Chocolates & Sweets": ["chocolate", "candy", "sweets", "mithai"],
+    "Bakery & Biscuits": ["biscuit", "cookies", "cake", "rusk"],
+    "Tea & Coffee": ["tea", "coffee", "green tea", "kadak chai"],
+    "Instant & Frozen Food": ["noodles", "frozen food", "instant mix", "pasta"],
 }
 
 

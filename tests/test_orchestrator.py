@@ -144,9 +144,13 @@ class TestPipelineOrchestrator:
         assert report.brand == "Amul"
         assert report.category == "Dairy & Bread"
 
-        # Verify data was seeded
+        # Verify data was seeded: 3 categories × 3 platforms × 10 products = 90
         count = orch.conn.execute("SELECT COUNT(*) FROM product_catalog").fetchone()[0]
-        assert count == 30  # 10 per platform
+        assert count == 90
+
+        # Verify all 3 categories present
+        cats = {r[0] for r in orch.conn.execute("SELECT DISTINCT category FROM product_catalog").fetchall()}
+        assert cats == {"Dairy & Bread", "Fruits & Vegetables", "Snacks & Munchies"}
 
 
 class TestCLIParsing:

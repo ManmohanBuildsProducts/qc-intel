@@ -26,6 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--scrape", action="store_true", help="Run scraper agents")
     mode.add_argument("--calculate-sales", action="store_true", help="Calculate daily sales")
     mode.add_argument("--normalize", action="store_true", help="Normalize products cross-platform")
+    mode.add_argument("--normalize-all", action="store_true", help="Normalize all default categories")
     mode.add_argument("--analyze", action="store_true", help="Generate market intelligence report")
     mode.add_argument("--demo", action="store_true", help="Demo with fixture data (no live scraping)")
     mode.add_argument("--full-pipeline", action="store_true", help="Run full pipeline end-to-end")
@@ -72,6 +73,12 @@ async def async_main(args: argparse.Namespace) -> None:
             result.mappings_created,
             result.unmapped_count,
         )
+
+    elif args.normalize_all:
+        results = await orch.run_all_categories()
+        total_canonical = sum(r.canonical_products_created for r in results)
+        total_mappings = sum(r.mappings_created for r in results)
+        logger.info("All categories normalized: %d canonical, %d mappings total", total_canonical, total_mappings)
 
     elif args.analyze:
         report = await orch.run_analysis(args.brand, args.category)

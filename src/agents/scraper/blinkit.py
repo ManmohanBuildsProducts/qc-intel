@@ -15,7 +15,13 @@ logger = logging.getLogger(__name__)
 CATEGORY_SEARCH_TERMS = {
     "Dairy & Bread": ["milk", "curd", "bread", "butter", "cheese", "paneer"],
     "Fruits & Vegetables": ["vegetables", "fruits", "onion", "potato", "tomato"],
-    "Snacks & Munchies": ["chips", "namkeen", "biscuits", "cookies", "snacks"],
+    "Snacks & Munchies": ["chips", "namkeen", "popcorn", "peanuts", "snacks"],
+    "Beverages": ["cold drinks", "juice", "energy drink", "soda", "coconut water"],
+    "Atta & Staples": ["atta", "rice", "dal", "maida", "besan"],
+    "Chocolates & Sweets": ["chocolate", "candy", "sweets", "mithai"],
+    "Bakery & Biscuits": ["biscuit", "cookies", "cake", "rusk"],
+    "Tea & Coffee": ["tea", "coffee", "green tea", "kadak chai"],
+    "Instant & Frozen Food": ["noodles", "frozen food", "instant mix", "pasta"],
 }
 
 
@@ -121,9 +127,9 @@ class BlinkitScraper(BaseScraper):
         pattern = re.compile(
             r'button\s+"(?:\d+%?\s+OFF\s+)?(\d+)\s+mins?\s+'  # optional % OFF + ETA
             r'(.+?)\s+'                     # product name
-            r'([\d.,]+\s*(?:ml|ltr|l|gm|g|kg|pcs?|pack)\b'
+            r'([\d.,]+\s*(?:ml|ltr|l|gm|g|kg|pcs?|pack|can|bottle|pouch|sachet|box|jar|tin)\b'
             r'(?:\s*x\s*[\d.,]+\s*'
-            r'(?:ml|ltr|l|gm|g|kg|pcs?|pack))?)\s+'  # size
+            r'(?:ml|ltr|l|gm|g|kg|pcs?|pack|can|bottle|pouch|sachet|box|jar|tin))?)\s+'  # size
             r'₹(\d+(?:\.\d+)?)'            # price
             r'(?:\s+₹(\d+(?:\.\d+)?))?'    # optional MRP
             r'\s+ADD"',

@@ -41,7 +41,17 @@ GURUGRAM_PINCODES: list[PincodeLocation] = [
 SEED_PINCODES = ["122001", "122002", "122003", "122008", "122010", "122015", "122018", "122051"]
 
 # Default scrape categories
-DEFAULT_CATEGORIES = ["Dairy & Bread", "Fruits & Vegetables", "Snacks & Munchies"]
+DEFAULT_CATEGORIES = [
+    "Dairy & Bread",
+    "Fruits & Vegetables",
+    "Snacks & Munchies",
+    "Beverages",
+    "Atta & Staples",
+    "Chocolates & Sweets",
+    "Bakery & Biscuits",
+    "Tea & Coffee",
+    "Instant & Frozen Food",
+]
 
 # User agents for rotation  # noqa: E501
 USER_AGENTS = [

@@ -74,33 +74,71 @@ class PipelineOrchestrator:
         return await self.run_analysis(brand, category)
 
     async def run_demo(self) -> MarketReport:
-        """Demo mode: seed fixture data, run normalize + analyze. No live scraping."""
-        logger.info("Running demo with fixture data...")
+        """Demo mode: seed all categories from fixtures, normalize, analyze. No live scraping."""
+        from src.config.settings import DEFAULT_CATEGORIES
 
-        # Seed all 3 platforms from fixtures
+        logger.info("Running demo with fixture data (all categories)...")
+
+        category_fixture_map: dict[str, list[tuple[Platform, str]]] = {
+            "Dairy & Bread": [
+                (Platform.BLINKIT, "blinkit_dairy.json"),
+                (Platform.ZEPTO, "zepto_dairy.json"),
+                (Platform.INSTAMART, "instamart_dairy.json"),
+            ],
+            "Fruits & Vegetables": [
+                (Platform.BLINKIT, "blinkit_fv.json"),
+                (Platform.ZEPTO, "zepto_fv.json"),
+                (Platform.INSTAMART, "instamart_fv.json"),
+            ],
+            "Snacks & Munchies": [
+                (Platform.BLINKIT, "blinkit_snacks.json"),
+                (Platform.ZEPTO, "zepto_snacks.json"),
+                (Platform.INSTAMART, "instamart_snacks.json"),
+            ],
+        }
+
         scrape_svc = ScrapeService(self.conn)
-        for platform, filename in [
-            (Platform.BLINKIT, "blinkit_dairy.json"),
-            (Platform.ZEPTO, "zepto_dairy.json"),
-            (Platform.INSTAMART, "instamart_dairy.json"),
-        ]:
-            fixture_path = FIXTURES_DIR / filename
-            items = json.loads(fixture_path.read_text())
-            scrape_svc.process_scrape_results(
-                items, platform, "122001", "Dairy & Bread", TimeOfDay.MORNING
+        for category in DEFAULT_CATEGORIES:
+            fixtures = category_fixture_map.get(category, [])
+            for platform, filename in fixtures:
+                fixture_path = FIXTURES_DIR / filename
+                if not fixture_path.exists():
+                    logger.warning("Fixture not found: %s — skipping", fixture_path)
+                    continue
+                items = json.loads(fixture_path.read_text())
+                scrape_svc.process_scrape_results(
+                    items, platform, "122001", category, TimeOfDay.MORNING
+                )
+                logger.info("Seeded %s/%s: %d products", platform.value, category, len(items))
+
+            result = await self.run_normalization(category)
+            logger.info(
+                "Normalized %s: %d canonical, %d mappings",
+                category, result.canonical_products_created, result.mappings_created,
             )
-            logger.info("Seeded %s: %d products", platform.value, len(items))
 
-        # Normalize
-        result = await self.run_normalization("Dairy & Bread")
-        logger.info(
-            "Normalization: %d canonical, %d mappings",
-            result.canonical_products_created,
-            result.mappings_created,
-        )
-
-        # Generate report
         report = await self.run_analysis("Amul", "Dairy & Bread")
         logger.info("Report generated: %s", report.report_path)
-
         return report
+
+    async def run_all_categories(
+        self,
+        categories: list[str] | None = None,
+    ) -> list[NormalizationResult]:
+        """Normalize all specified categories (default: DEFAULT_CATEGORIES). No scraping."""
+        from src.config.settings import DEFAULT_CATEGORIES
+
+        targets = categories or DEFAULT_CATEGORIES
+        results = []
+        for category in targets:
+            logger.info("Normalizing category: %s", category)
+            result = await self.run_normalization(category)
+            results.append(result)
+            logger.info(
+                "  %s: %d canonical, %d mappings, %d unmapped",
+                category,
+                result.canonical_products_created,
+                result.mappings_created,
+                result.unmapped_count,
+            )
+        return results

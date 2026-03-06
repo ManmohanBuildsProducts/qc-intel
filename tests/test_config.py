@@ -49,8 +49,10 @@ class TestPincodes:
 
 class TestCategories:
     def test_default_categories(self) -> None:
-        assert len(DEFAULT_CATEGORIES) == 3
+        assert len(DEFAULT_CATEGORIES) == 9
         assert "Dairy & Bread" in DEFAULT_CATEGORIES
+        assert "Beverages" in DEFAULT_CATEGORIES
+        assert "Tea & Coffee" in DEFAULT_CATEGORIES
 
     def test_three_platforms(self) -> None:
         from src.models.product import Platform

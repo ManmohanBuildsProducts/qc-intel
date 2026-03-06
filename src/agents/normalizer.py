@@ -105,6 +105,22 @@ class NormalizerService:
             for prod_idx, product in enumerate(products):
                 if prod_idx in best_matches:
                     anchor_idx, sim = best_matches[prod_idx]
+
+                    # Unit mismatch guard: reject if both units are parseable but differ.
+                    # Catches same-name-different-size merges (e.g. 500ml vs 1L).
+                    anchor_unit = normalize_unit(anchor_products[anchor_idx].unit)
+                    product_unit = normalize_unit(product.unit)
+                    if anchor_unit and product_unit and anchor_unit != product_unit:
+                        logger.debug(
+                            "Unit mismatch — rejecting merge: %s (%s) vs %s (%s)",
+                            anchor_products[anchor_idx].name, anchor_unit,
+                            product.name, product_unit,
+                        )
+                        # Fall through to create a new canonical below
+                        best_matches.pop(prod_idx)
+
+                if prod_idx in best_matches:
+                    anchor_idx, sim = best_matches[prod_idx]
                     canonical_id = anchor_canonical_ids[anchor_idx]
                     self.canonical_repo.insert_mapping(
                         ProductMapping(

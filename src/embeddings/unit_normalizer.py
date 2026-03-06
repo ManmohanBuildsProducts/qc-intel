@@ -34,6 +34,12 @@ _UNIT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Pattern to extract size from parenthetical: "1 pack (500 ml)" → "500 ml"
+_PAREN_PATTERN = re.compile(
+    r"\(\s*(\d+(?:\.\d+)?)\s*([a-zA-Z]+)\s*\)",
+    re.IGNORECASE,
+)
+
 
 def normalize_unit(raw: str | None) -> str | None:
     """Normalize a product unit string to a standard form.
@@ -44,6 +50,8 @@ def normalize_unit(raw: str | None) -> str | None:
         "1 Kg" -> "1kg"
         "1000g" -> "1kg"
         "6 pcs" -> "6pcs"
+        "1 pack (500 ml)" -> "500ml"
+        "1 pouch (450 ml)" -> "450ml"
 
     Returns None for unparseable inputs.
     """
@@ -51,6 +59,11 @@ def normalize_unit(raw: str | None) -> str | None:
         return None
 
     raw = raw.strip().lower()
+
+    # Extract size from parenthetical if present: "1 pack (500 ml)" → use "500 ml"
+    paren_match = _PAREN_PATTERN.search(raw)
+    if paren_match:
+        raw = f"{paren_match.group(1)} {paren_match.group(2)}"
 
     match = _UNIT_PATTERN.search(raw)
     if not match:
