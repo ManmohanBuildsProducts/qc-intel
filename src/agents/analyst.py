@@ -132,7 +132,7 @@ class AnalyticsService:
             )
 
         user_message = self._format_data_for_claude(data)
-        client = genai.Client()
+        client = genai.Client(api_key=settings.google_api_key)
         response = await client.aio.models.generate_content(
             model=settings.analyst_model,
             contents=user_message,

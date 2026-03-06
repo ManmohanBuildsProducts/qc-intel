@@ -140,7 +140,7 @@ class NormalizerService:
         self, product_a: CatalogProduct, product_b: CatalogProduct, similarity: float
     ) -> bool:
         """Use Gemini to validate an ambiguous product match."""
-        client = genai.Client()
+        client = genai.Client(api_key=settings.google_api_key)
         response = await client.aio.models.generate_content(
             model=settings.normalizer_model,
             contents=(

@@ -3,6 +3,7 @@
 import random
 from dataclasses import dataclass
 
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 
@@ -87,8 +88,8 @@ class Settings(BaseSettings):
     embedding_similarity_threshold: float = 0.85
     embedding_batch_size: int = 64
 
-    # Claude API
-    anthropic_api_key: str = ""
+    # Gemini API key — reads GOOGLE_API_KEY from .env (no QC_ prefix)
+    google_api_key: str = Field("", validation_alias="GOOGLE_API_KEY")
     scraper_model: str = "gemini-2.5-flash"
     normalizer_model: str = "gemini-2.5-flash"
     analyst_model: str = "gemini-2.5-flash"
@@ -96,7 +97,7 @@ class Settings(BaseSettings):
     max_budget_normalizer: float = 1.00
     max_budget_analyst: float = 3.00
 
-    model_config = {"env_prefix": "QC_", "env_file": ".env", "extra": "ignore"}
+    model_config = {"env_prefix": "QC_", "env_file": ".env", "extra": "ignore", "populate_by_name": True}
 
 
 # Singleton
