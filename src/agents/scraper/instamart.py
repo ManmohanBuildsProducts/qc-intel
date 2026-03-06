@@ -6,14 +6,15 @@ import re
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+from src.config.settings import get_pincode_location
 from src.models.product import Platform, ScrapeRun, TimeOfDay
 
 from .base import BaseScraper
 
-# Use Chromium for Instamart — Swiggy's WAF blocks headless Firefox
+# Use headed Chromium for Instamart — Swiggy's WAF blocks headless browsers
 INSTAMART_PLAYWRIGHT_SERVER = StdioServerParameters(
     command="npx",
-    args=["@playwright/mcp@latest", "--browser", "chromium", "--headless"],
+    args=["@playwright/mcp@latest", "--browser", "chromium"],
 )
 
 logger = logging.getLogger(__name__)
@@ -82,15 +83,33 @@ class InstamartScraper(BaseScraper):
         self, session: ClientSession, pincode: str, category: str,
     ) -> list[dict]:
         """Scrape Instamart: establish session, call POST search API, fallback to snapshot."""
+        location = get_pincode_location(pincode)
+        lat = location.lat if location else 28.4595
+        lng = location.lng if location else 77.0266
+
         # Step 1: Navigate to Swiggy homepage to establish session cookies
         logger.info("[instamart] Navigating to Swiggy homepage...")
         await self._navigate(session, "https://www.swiggy.com")
         await self._wait(session)
 
-        # Step 2: Navigate to Instamart to pick up store/location context
+        # Step 2: Navigate to Instamart and set Gurugram location cookies
         logger.info("[instamart] Navigating to Instamart...")
         await self._navigate(session, "https://www.swiggy.com/instamart")
         await self._wait(session)
+
+        # Swiggy reads location from userLocation + _dl cookies (not HttpOnly)
+        loc_json = (
+            f'{{"address":"","lat":{lat},"lng":{lng},'
+            f'"id":"","annotation":"","name":"Gurugram"}}'
+        )
+        await self._evaluate(session, (
+            f'() => {{ '
+            f'const loc = encodeURIComponent(\'{loc_json}\'); '
+            f'document.cookie = "userLocation=" + loc + ";path=/;max-age=86400"; '
+            f'document.cookie = "_dl={lat};path=/;max-age=86400"; '
+            f'return "location set"; }}'
+        ))
+        logger.info("[instamart] Location cookies set for (%.4f, %.4f)", lat, lng)
 
         terms = CATEGORY_SEARCH_TERMS.get(category, [category.lower()])
         all_items: list[dict] = []
@@ -192,51 +211,87 @@ class InstamartScraper(BaseScraper):
     def _extract_from_snapshot(
         snapshot: str, category: str,
     ) -> list[dict]:
-        """Fallback: extract products from Instamart accessibility snapshot.
+        """Extract products from Instamart accessibility snapshot.
 
-        Scans for price patterns (₹XX) and nearby product name lines.
+        Each product card has the structure:
+          generic "Delivery in XX MINS" [ref=...]:
+            generic [ref=...]: XX MINS          ← skip
+          generic [ref=...]: <Product Name>      ← 1-2 lines after delivery marker
+          generic [ref=...]: <description>       ← skip
+          ...
+          generic [ref=...]: ₹ <price>           ← within next 15 lines
+          generic [ref=...]: ₹ <mrp>             ← optional (if discounted)
         """
         products = []
         lines = snapshot.split("\n")
+
         for i, line in enumerate(lines):
-            price_match = re.search(r"₹\s*(\d+(?:\.\d+)?)", line)
-            if not price_match:
-                continue
-            price = float(price_match.group(1))
-            if price < 5 or price > 10000:
+            if 'generic "Delivery in' not in line or "MINS" not in line:
                 continue
 
-            # Look back for product name
-            for j in range(max(0, i - 5), i):
-                prev = lines[j].strip()
-                skip = [
-                    "search", "login", "cart", "delivery",
-                    "link", "banner", "button", "heading",
-                    "alert", "Try Again", "Something went",
-                ]
-                if any(x.lower() in prev.lower() for x in skip):
+            # Find product name: first valid generic line after the delivery marker
+            # (skip the "XX MINS" sub-line, delivery-related text, short strings)
+            name = None
+            name_idx = -1
+            for j in range(i + 1, min(i + 6, len(lines))):
+                nm = re.search(r"generic\s*[^\n:]*:\s*(.{5,})\s*$", lines[j])
+                if not nm:
                     continue
-                nm = re.search(r"generic.*:\s*(.{5,})\s*$", prev)
-                if nm:
-                    name = nm.group(1).strip().strip('"')
-                    if (
-                        len(name) > 3
-                        and not name.startswith("http")
-                        and not name.startswith("₹")
-                        and "OFF" not in name
-                    ):
-                        products.append({
-                            "id": f"im-{len(products) + 1}",
-                            "name": name,
-                            "brand": None,
-                            "category": category,
-                            "subcategory": None,
-                            "packSize": None,
-                            "price": price,
-                            "totalPrice": price,
-                            "inStock": True,
-                            "maxSelectableQuantity": 5,
-                            "images": [],
-                        })
-                        break
+                candidate = nm.group(1).strip()
+                if (
+                    "MINS" not in candidate
+                    and "Delivery" not in candidate
+                    and not candidate.startswith("₹")
+                    and not candidate.startswith("http")
+                    and "OFF" not in candidate
+                ):
+                    name = candidate
+                    name_idx = j
+                    break
+
+            if not name:
+                continue
+
+            # Find price + size in the next 15 lines after name
+            price = None
+            mrp = None
+            size = None
+            for k in range(name_idx + 1, min(name_idx + 16, len(lines))):
+                kline = lines[k]
+                # Size: "text: 500 ml" or "generic [ref=...]: 500 ml"
+                if size is None:
+                    sm = re.search(
+                        r"(?:text|generic[^\n:]*):?\s*([\d.]+\s*(?:ml|g|kg|ltr?|pcs?|pack|Piece|piece))\b",
+                        kline, re.IGNORECASE,
+                    )
+                    if sm:
+                        size = sm.group(1).strip()
+                # Price
+                pm = re.search(r"₹\s*(\d+(?:\.\d+)?)", kline)
+                if pm:
+                    val = float(pm.group(1))
+                    if 5 <= val <= 10000:
+                        if price is None:
+                            price = val
+                        elif mrp is None:
+                            mrp = val
+                            break
+
+            if not price:
+                continue
+
+            products.append({
+                "id": f"im-{len(products) + 1}",
+                "name": name,
+                "brand": None,
+                "category": category,
+                "subcategory": None,
+                "packSize": size,
+                "price": price,
+                "totalPrice": mrp if mrp else price,
+                "inStock": True,
+                "maxSelectableQuantity": 5,
+                "images": [],
+            })
+
         return products

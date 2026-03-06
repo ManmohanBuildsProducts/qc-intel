@@ -143,7 +143,7 @@ class ObservationRepository:
         with get_cursor(self.conn) as cur:
             cur.execute(
                 """
-                INSERT INTO product_observations
+                INSERT OR IGNORE INTO product_observations
                     (catalog_id, scrape_run_id, pincode, price, mrp, in_stock, max_cart_qty, time_of_day, raw_json)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
