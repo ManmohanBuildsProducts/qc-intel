@@ -37,36 +37,50 @@ LIVE_DB_PATH = ROOT / "data" / "qc_intel.db"
 CATEGORY = "Dairy & Bread"
 PINCODE = "122001"
 
-# Hardcoded ground truth from fixture inspection:
-# blinkit_platform_product_id → zepto_product_id / instamart_product_id
-# Only pairs that are truly the same product (same brand, same item type, same size)
-GROUND_TRUTH_BL_ZP: set[tuple[str, str]] = {
-    ("39868", "z-31001"),  # Amul Taaza Toned Milk 500ml
-    ("39870", "z-31002"),  # Mother Dairy Full Cream Milk 500ml
-    ("41200", "z-31003"),  # Amul Gold Full Cream Milk 500ml
-    ("42100", "z-31010"),  # Amul Masti Dahi 400g
-    ("42200", "z-31011"),  # Mother Dairy Classic Curd 400g
-    ("43000", "z-31020"),  # Amul Butter 100g
-    ("43500", "z-31030"),  # Britannia Cheese Slices 200g
-    ("44000", "z-31040"),  # Amul Paneer 200g
-    ("44500", "z-31050"),  # Nestle A+ Nourish Toned Milk 1L
-    # blinkit 45000 (Harvest Gold) ≠ zepto z-31060 (English Oven) — different brands
-}
+# Ground truth as fixture file index pairs (0-indexed, matching JSON array order).
+# parsers.py uses _stable_id() hashes as platform_product_id — not the raw fixture
+# JSON "id" fields — so we derive actual IDs at runtime from loaded CatalogProducts.
+_GT_IDX_BL_ZP: frozenset[tuple[int, int]] = frozenset({
+    (0, 0),  # Amul Taaza Toned Milk 500ml
+    (1, 1),  # Mother Dairy Full Cream Milk 500ml
+    (2, 2),  # Amul Gold Full Cream Milk 500ml
+    (3, 3),  # Amul Masti Dahi 400g
+    (4, 4),  # Mother Dairy Classic Curd 400g
+    (5, 5),  # Amul Butter 100g
+    (6, 6),  # Britannia Cheese Slices 200g
+    (7, 7),  # Amul Paneer 200g
+    (8, 8),  # Nestle A+ Nourish Toned Milk 1L
+    # (9, 9): Harvest Gold ≠ English Oven — different brands
+})
 
-GROUND_TRUTH_BL_IM: set[tuple[str, str]] = {
-    ("39868", "im-5001"),  # Amul Taaza Toned Milk 500ml
-    ("39870", "im-5002"),  # Mother Dairy Full Cream Milk 500ml
-    ("41200", "im-5003"),  # Amul Gold Milk 500ml
-    ("42100", "im-5010"),  # Amul Masti Dahi 400g
-    ("42200", "im-5011"),  # Mother Dairy Curd 400g
-    ("43000", "im-5020"),  # Amul Butter 100g
-    ("43500", "im-5030"),  # Britannia Cheese Slices 200g
-    ("44000", "im-5040"),  # Amul Paneer 200g
-    # blinkit 44500 (Nestle) ≠ im-5050 (Verka Lassi) — different product
-    # blinkit 45000 (Harvest Gold) ≠ im-5060 (Modern Multigrain) — different brands
-}
+_GT_IDX_BL_IM: frozenset[tuple[int, int]] = frozenset({
+    (0, 0),  # Amul Taaza Toned Milk 500ml
+    (1, 1),  # Mother Dairy Full Cream Milk 500ml
+    (2, 2),  # Amul Gold Milk 500ml
+    (3, 3),  # Amul Masti Dahi 400g
+    (4, 4),  # Mother Dairy Curd 400g
+    (5, 5),  # Amul Butter 100g
+    (6, 6),  # Britannia Cheese Slices 200g
+    (7, 7),  # Amul Paneer 200g
+    # (8, 8): Nestle Toned Milk ≠ Verka Lassi — different product
+    # (9, 9): Harvest Gold ≠ Modern Multigrain — different brands
+})
 
-GROUND_TRUTH_ALL: set[tuple[str, str]] = GROUND_TRUTH_BL_ZP | GROUND_TRUTH_BL_IM
+_GT_TOTAL = len(_GT_IDX_BL_ZP) + len(_GT_IDX_BL_IM)  # 17
+
+
+def _derive_ground_truth(
+    blinkit: list[CatalogProduct],
+    zepto: list[CatalogProduct],
+    instamart: list[CatalogProduct],
+) -> set[tuple[str, str]]:
+    """Build ground truth pairs from loaded products using fixture index mappings."""
+    gt: set[tuple[str, str]] = set()
+    for bi, zi in _GT_IDX_BL_ZP:
+        gt.add((blinkit[bi].platform_product_id, zepto[zi].platform_product_id))
+    for bi, im_i in _GT_IDX_BL_IM:
+        gt.add((blinkit[bi].platform_product_id, instamart[im_i].platform_product_id))
+    return gt
 
 
 def _seed_fixtures(conn: sqlite3.Connection) -> None:
@@ -115,10 +129,14 @@ def strategy1_sweep(thresholds: list[float]) -> list[dict]:
     _seed_fixtures(conn)
 
     cat_repo = CatalogRepository(conn)
-    blinkit = cat_repo.get_by_platform(Platform.BLINKIT)
-    zepto = cat_repo.get_by_platform(Platform.ZEPTO)
-    instamart = cat_repo.get_by_platform(Platform.INSTAMART)
+    # Sort by DB id to match fixture JSON insertion order
+    blinkit = sorted(cat_repo.get_by_platform(Platform.BLINKIT), key=lambda p: p.id or 0)
+    zepto = sorted(cat_repo.get_by_platform(Platform.ZEPTO), key=lambda p: p.id or 0)
+    instamart = sorted(cat_repo.get_by_platform(Platform.INSTAMART), key=lambda p: p.id or 0)
     conn.close()
+
+    # Derive ground truth from actual platform_product_id hashes (not raw fixture ids)
+    ground_truth = _derive_ground_truth(blinkit, zepto, instamart)
 
     embedder = ProductEmbedder()
 
@@ -137,9 +155,9 @@ def strategy1_sweep(thresholds: list[float]) -> list[dict]:
     for t in thresholds:
         actual = _build_actual_pairs_from_sim(blinkit, zepto, sim_zp, t) | \
                  _build_actual_pairs_from_sim(blinkit, instamart, sim_im, t)
-        tp = len(GROUND_TRUTH_ALL & actual)
-        fp = len(actual - GROUND_TRUTH_ALL)
-        fn = len(GROUND_TRUTH_ALL - actual)
+        tp = len(ground_truth & actual)
+        fp = len(actual - ground_truth)
+        fn = len(ground_truth - actual)
         p, r, f1 = _prf(tp, fp, fn)
         results.append({"threshold": t, "precision": p, "recall": r, "f1": f1, "tp": tp, "fp": fp, "fn": fn})
 
@@ -360,7 +378,7 @@ def print_report(
     if sweep_results is not None and sweep_results is not _SKIP:
         print()
         print("[Strategy 1 — Fixture Ground Truth]")
-        print(f"  Ground truth pairs: {len(GROUND_TRUTH_ALL)} (9 blinkit-zepto, 8 blinkit-instamart)")
+        print(f"  Ground truth pairs: {_GT_TOTAL} ({len(_GT_IDX_BL_ZP)} blinkit-zepto, {len(_GT_IDX_BL_IM)} blinkit-instamart)")
         print()
         print(f"  {'Threshold':>10}  {'Precision':>10}  {'Recall':>8}  {'F1':>8}  {'TP':>4}  {'FP':>4}  {'FN':>4}")
         print("  " + "-" * 60)
