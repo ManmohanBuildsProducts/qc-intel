@@ -56,7 +56,7 @@ def init_db(db_path: str | None = None) -> sqlite3.Connection:
 def get_connection(db_path: str | None = None) -> sqlite3.Connection:
     """Get a connection to an already-initialized database."""
     db_path = db_path or settings.db_path
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute(f"PRAGMA busy_timeout={settings.db_busy_timeout}")
     conn.execute("PRAGMA foreign_keys=ON")
