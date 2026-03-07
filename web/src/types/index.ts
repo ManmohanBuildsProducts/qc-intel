@@ -53,6 +53,63 @@ export interface ReportResponse {
   is_opportunity_mode: boolean;
 }
 
+export interface BrandMetricsShare {
+  sku_count: number;
+  category_total: number;
+  share_pct: number;
+  rank: number;
+}
+
+export interface BrandMetricsHistogram {
+  labels: string[];
+  brand: number[];
+  category: number[];
+}
+
+export interface BrandMetricsMrpTiers {
+  labels: string[];
+  brand: number[];
+  category: number[];
+  budget_threshold: number;
+  premium_threshold: number;
+}
+
+export interface BrandMetricsDiscount {
+  brand_avg: number;
+  category_avg: number;
+}
+
+export interface BrandMetricsPlatformCoverage {
+  by_platform: Record<string, number>;
+  cross_platform_count: number;
+  total: number;
+}
+
+export interface PriceParityRow {
+  canonical_name: string;
+  blinkit_price: number;
+  zepto_price: number;
+  delta: number;
+  delta_pct: number;
+}
+
+export interface CompetitorRow {
+  brand: string;
+  sku_count: number;
+  is_target: boolean;
+}
+
+export interface BrandMetrics {
+  share: BrandMetricsShare;
+  price_histogram: BrandMetricsHistogram;
+  mrp_tiers: BrandMetricsMrpTiers;
+  discount: BrandMetricsDiscount;
+  platform_coverage: BrandMetricsPlatformCoverage;
+  price_parity: PriceParityRow[];
+  all_competitors: CompetitorRow[];
+  canonical_competitors: { brand: string }[];
+}
+
 export interface ApiResponse<T> {
   data: T;
 }

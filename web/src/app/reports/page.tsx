@@ -2,10 +2,11 @@
 
 import { useState } from "react";
 import BrandCategorySelector from "@/components/BrandCategorySelector";
+import BrandMetricsPanel from "@/components/BrandMetricsPanel";
 import ReportViewer from "@/components/ReportViewer";
 import { ReportSkeleton } from "@/components/LoadingSkeleton";
-import { generateReport } from "@/lib/api";
-import type { ReportResponse } from "@/types";
+import { generateReport, fetchBrandMetrics } from "@/lib/api";
+import type { ReportResponse, BrandMetrics } from "@/types";
 
 function extractSection(content: string, heading: string): string {
   const lines = content.split("\n");
@@ -63,6 +64,7 @@ function KeyInsightsPanel({ report }: { report: ReportResponse }) {
 
 export default function ReportsPage() {
   const [report, setReport] = useState<ReportResponse | null>(null);
+  const [metrics, setMetrics] = useState<BrandMetrics | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -70,9 +72,14 @@ export default function ReportsPage() {
     setLoading(true);
     setError(null);
     setReport(null);
+    setMetrics(null);
     try {
-      const res = await generateReport(brand, category);
-      setReport(res.data);
+      const [reportRes, metricsRes] = await Promise.all([
+        generateReport(brand, category),
+        fetchBrandMetrics(brand, category).catch(() => null),
+      ]);
+      setReport(reportRes.data);
+      if (metricsRes) setMetrics(metricsRes.data);
     } catch {
       setError("Failed to generate report. Is the API running?");
     } finally {
@@ -128,6 +135,16 @@ export default function ReportsPage() {
               </span>
             )}
           </div>
+
+          {/* Brand metrics panel */}
+          {metrics && (
+            <div>
+              <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
+                Competitive Metrics
+              </h3>
+              <BrandMetricsPanel brand={report.brand} metrics={metrics} />
+            </div>
+          )}
 
           {/* Key insights panel (white space + recommendations) */}
           <KeyInsightsPanel report={report} />

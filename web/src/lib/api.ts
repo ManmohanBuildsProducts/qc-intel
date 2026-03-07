@@ -1,5 +1,6 @@
 import type {
   Brand,
+  BrandMetrics,
   Category,
   Product,
   DashboardStats,
@@ -63,6 +64,14 @@ export function fetchChartData(
     ? `?${new URLSearchParams(params).toString()}`
     : "";
   return apiFetch(`/charts/${endpoint}${query}`);
+}
+
+export function fetchBrandMetrics(
+  brand: string,
+  category: string
+): Promise<ApiResponse<BrandMetrics>> {
+  const q = new URLSearchParams({ category }).toString();
+  return apiFetch(`/brand/${encodeURIComponent(brand)}/metrics?${q}`);
 }
 
 export function generateReport(

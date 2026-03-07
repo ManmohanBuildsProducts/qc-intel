@@ -44,11 +44,16 @@ export default function BrandCategorySelector({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  // When a category is selected, restrict suggestions to brands in that category
+  const categoryBrands = category
+    ? brands.filter((b) => b.categories.includes(category))
+    : brands;
+
   const filtered = brandInput.trim()
-    ? brands.filter((b) =>
+    ? categoryBrands.filter((b) =>
         b.name.toLowerCase().includes(brandInput.toLowerCase())
       )
-    : brands.slice(0, 8);
+    : categoryBrands.slice(0, 8);
 
   const canSubmit = brandInput.trim().length > 0 && category.length > 0;
 
@@ -128,9 +133,9 @@ export default function BrandCategorySelector({
         </button>
       </div>
 
-      {brandInput.trim() && !brands.find((b) => b.name === brandInput.trim()) && (
+      {brandInput.trim() && !categoryBrands.find((b) => b.name === brandInput.trim()) && (
         <p className="text-xs text-amber-400">
-          ⚡ &ldquo;{brandInput.trim()}&rdquo; is not in the database — generating market entry
+          ⚡ &ldquo;{brandInput.trim()}&rdquo; is not in{category ? ` ${category}` : " the database"} — generating market entry
           opportunity analysis based on competitor landscape.
         </p>
       )}
