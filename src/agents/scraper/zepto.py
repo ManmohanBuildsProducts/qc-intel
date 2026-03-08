@@ -104,7 +104,9 @@ class ZeptoScraper(BaseScraper):
                 name = item.get("name", "")
                 if name and name not in seen_names:
                     seen_names.add(name)
-                    item["product_id"] = f"z-{len(all_items) + 1}"
+                    # Preserve real pvid from URL extraction — only assign sequential fallback if missing
+                    if not item.get("product_id"):
+                        item["product_id"] = f"z-{len(all_items) + 1}"
                     all_items.append(item)
 
             logger.info(

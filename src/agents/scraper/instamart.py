@@ -3,6 +3,8 @@
 import logging
 import re
 
+import os
+
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
@@ -10,12 +12,6 @@ from src.config.settings import get_pincode_location
 from src.models.product import Platform, ScrapeRun, TimeOfDay
 
 from .base import BaseScraper
-
-# Use headed Chromium for Instamart — Swiggy's WAF blocks headless browsers
-INSTAMART_PLAYWRIGHT_SERVER = StdioServerParameters(
-    command="npx",
-    args=["@playwright/mcp@latest", "--browser", "chromium"],
-)
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +58,12 @@ class InstamartScraper(BaseScraper):
 
     async def scrape(self, pincode: str, category: str, time_of_day: TimeOfDay) -> ScrapeRun:
         """Override to use Chromium — less detectable by Swiggy's WAF than Firefox."""
-        async with stdio_client(INSTAMART_PLAYWRIGHT_SERVER) as (read, write):
+        args = ["@playwright/mcp@latest", "--browser", "chromium"]
+        proxy_url = os.environ.get("QC_PROXY_URL")
+        if proxy_url:
+            args += ["--proxy-server", proxy_url]
+        server = StdioServerParameters(command="npx", args=args)
+        async with stdio_client(server) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 try:
@@ -165,7 +166,9 @@ class InstamartScraper(BaseScraper):
                 name = item.get("name", "")
                 if name and name not in seen_names:
                     seen_names.add(name)
-                    item["id"] = f"im-{len(all_items) + 1}"
+                    # Preserve real id from API — only assign sequential fallback if missing
+                    if not item.get("id") or str(item["id"]).startswith("im-"):
+                        item["id"] = f"im-{len(all_items) + 1}"
                     all_items.append(item)
 
             logger.info(
@@ -198,8 +201,13 @@ class InstamartScraper(BaseScraper):
                 price = float(pricing.get("offer_price") or pricing.get("price") or 0)
                 mrp = float(pricing.get("mrp") or price)
                 cat_info = prod.get("category") or {}
+                # Real product ID from API
+                real_id = prod.get("id") or prod.get("product_id")
+                # Image URL: try direct field, then images array
+                images = prod.get("images") or []
+                image_url = prod.get("image_url") or (images[0] if images else None)
                 products.append({
-                    "id": f"im-{len(products) + 1}",
+                    "id": str(real_id) if real_id else f"im-{len(products) + 1}",
                     "name": name,
                     "brand": prod.get("brand_name"),
                     "category": category,
@@ -208,8 +216,10 @@ class InstamartScraper(BaseScraper):
                     "price": price,
                     "totalPrice": mrp,
                     "inStock": prod.get("in_stock", True),
-                    "maxSelectableQuantity": prod.get("max_selectable_quantity", 5),
-                    "images": [],
+                    "maxSelectableQuantity": prod.get("max_selectable_quantity", 0),
+                    "inventory_count": prod.get("available_quantity") or prod.get("inventory_count"),
+                    "image_url": image_url,
+                    "images": images,
                 })
         return products
 

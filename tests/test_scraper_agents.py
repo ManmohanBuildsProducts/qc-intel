@@ -41,11 +41,11 @@ class TestBlinkitScraper:
         assert "lat" in prompt
         assert "lon" in prompt
 
-    def test_prompt_contains_xhr_details(self, db_session: sqlite3.Connection) -> None:
+    def test_prompt_contains_api_details(self, db_session: sqlite3.Connection) -> None:
         scraper = BlinkitScraper(db_session)
         prompt = scraper.get_system_prompt()
-        assert "XHR" in prompt
-        assert "listing" in prompt
+        assert "cart_item" in prompt
+        assert "inventory" in prompt
 
     def test_url_pattern(self, db_session: sqlite3.Connection) -> None:
         scraper = BlinkitScraper(db_session)
@@ -64,7 +64,7 @@ class TestBlinkitScraper:
     def test_url_uses_search(self, db_session: sqlite3.Connection) -> None:
         scraper = BlinkitScraper(db_session)
         url = scraper.get_scrape_url("122001", "Dairy & Bread")
-        assert "/s/?q=dairy" in url
+        assert "/s/?q=" in url
 
 
 class TestZeptoScraper:

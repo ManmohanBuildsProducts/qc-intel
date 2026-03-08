@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import sqlite3
 from abc import ABC, abstractmethod
 
@@ -13,6 +14,19 @@ from src.models.product import Platform, ScrapeRun, TimeOfDay
 from .service import ScrapeService
 
 logger = logging.getLogger(__name__)
+
+
+def _playwright_server(extra_args: list[str] | None = None) -> StdioServerParameters:
+    """Build Playwright MCP server params, injecting proxy if QC_PROXY_URL is set."""
+    args = ["@playwright/mcp@latest", "--browser", "firefox", "--headless"]
+    proxy_url = os.environ.get("QC_PROXY_URL")
+    if proxy_url:
+        args += ["--proxy-server", proxy_url]
+        logger.info("[base] Using proxy: %s", proxy_url)
+    if extra_args:
+        args += extra_args
+    return StdioServerParameters(command="npx", args=args)
+
 
 PLAYWRIGHT_SERVER = StdioServerParameters(
     command="npx",
@@ -52,7 +66,7 @@ class BaseScraper(ABC):
 
     async def scrape(self, pincode: str, category: str, time_of_day: TimeOfDay) -> ScrapeRun:
         """Run the scraper: open browser, extract products, persist."""
-        async with stdio_client(PLAYWRIGHT_SERVER) as (read, write):
+        async with stdio_client(_playwright_server()) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 try:

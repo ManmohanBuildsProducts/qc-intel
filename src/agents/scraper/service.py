@@ -84,6 +84,7 @@ class ScrapeService:
                     mrp=product.mrp,
                     in_stock=product.in_stock,
                     max_cart_qty=product.max_cart_qty,
+                    inventory_count=product.inventory_count,
                     time_of_day=time_of_day,
                     raw_json=product.raw_json,
                 )

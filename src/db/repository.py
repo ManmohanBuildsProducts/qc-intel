@@ -144,8 +144,9 @@ class ObservationRepository:
             cur.execute(
                 """
                 INSERT OR IGNORE INTO product_observations
-                    (catalog_id, scrape_run_id, pincode, price, mrp, in_stock, max_cart_qty, time_of_day, raw_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (catalog_id, scrape_run_id, pincode, price, mrp, in_stock,
+                     max_cart_qty, inventory_count, time_of_day, raw_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     obs.catalog_id,
@@ -155,6 +156,7 @@ class ObservationRepository:
                     obs.mrp,
                     1 if obs.in_stock else 0,
                     obs.max_cart_qty,
+                    obs.inventory_count,
                     obs.time_of_day.value,
                     obs.raw_json,
                 ),
@@ -189,17 +191,18 @@ class ObservationRepository:
 
     def _row_to_model(self, row: sqlite3.Row) -> ProductObservation:
         return ProductObservation(
-            id=row[0],
-            catalog_id=row[1],
-            scrape_run_id=row[2],
-            pincode=row[3],
-            price=row[4],
-            mrp=row[5],
-            in_stock=bool(row[6]),
-            max_cart_qty=row[7],
-            time_of_day=TimeOfDay(row[8]),
-            observed_at=datetime.fromisoformat(row[9]) if row[9] else None,
-            raw_json=row[10],
+            id=row["id"],
+            catalog_id=row["catalog_id"],
+            scrape_run_id=row["scrape_run_id"],
+            pincode=row["pincode"],
+            price=row["price"],
+            mrp=row["mrp"],
+            in_stock=bool(row["in_stock"]),
+            max_cart_qty=row["max_cart_qty"],
+            inventory_count=row["inventory_count"],
+            time_of_day=TimeOfDay(row["time_of_day"]),
+            observed_at=datetime.fromisoformat(row["observed_at"]) if row["observed_at"] else None,
+            raw_json=row["raw_json"],
         )
 
 
@@ -214,32 +217,24 @@ class SalesRepository:
 
         Returns the number of sales records created.
         """
-        # Get morning observations
-        morning_query = """
-            SELECT catalog_id, max_cart_qty FROM product_observations
-            WHERE date(observed_at) = ? AND time_of_day = 'morning'
-        """
-        night_query = """
-            SELECT catalog_id, pincode, max_cart_qty FROM product_observations
-            WHERE date(observed_at) = ? AND time_of_day = 'night'
-        """
+        # Use COALESCE(inventory_count, max_cart_qty) as the quantity signal.
+        # inventory_count is the real platform stock level (populated for Blinkit/Instamart).
+        # max_cart_qty is the fallback when inventory_count is NULL (Zepto snapshot path).
+        qty_expr = "COALESCE(inventory_count, max_cart_qty)"
+        pincode_clause = " AND pincode = ?" if pincode else ""
         params: list = [date]
         if pincode:
-            morning_query += " AND pincode = ?"
-            night_query += " AND pincode = ?"
             params.append(pincode)
 
-        self.conn.execute(morning_query, params).fetchall()
-        night_rows = self.conn.execute(night_query, params).fetchall()
+        night_rows = self.conn.execute(
+            f"SELECT catalog_id, pincode, {qty_expr} FROM product_observations"
+            f" WHERE date(observed_at) = ? AND time_of_day = 'night'{pincode_clause}",
+            params,
+        ).fetchall()
 
-        # Build lookup: (catalog_id, pincode) -> morning_qty
-        # For morning, we also need pincode
         morning_full = self.conn.execute(
-            """
-            SELECT catalog_id, pincode, max_cart_qty FROM product_observations
-            WHERE date(observed_at) = ? AND time_of_day = 'morning'
-            """
-            + (" AND pincode = ?" if pincode else ""),
+            f"SELECT catalog_id, pincode, {qty_expr} FROM product_observations"
+            f" WHERE date(observed_at) = ? AND time_of_day = 'morning'{pincode_clause}",
             params,
         ).fetchall()
 

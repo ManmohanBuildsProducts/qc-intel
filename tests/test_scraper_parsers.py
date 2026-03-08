@@ -22,9 +22,8 @@ class TestBlinkitParser:
     def test_field_mapping(self, blinkit_fixture_data: list[dict]) -> None:
         products = parse_blinkit_products(blinkit_fixture_data, "Dairy & Bread")
         first = products[0]
-        # Stable hash ID: 16-char hex derived from name+unit
-        assert len(first.platform_product_id) == 16
-        assert first.platform_product_id.isalnum()
+        # Real product ID from fixture (str of integer id)
+        assert first.platform_product_id == "39868"
         assert first.name == "Amul Taaza Toned Fresh Milk"
         assert first.brand == "Amul"
         assert first.unit == "500 ml"
@@ -64,9 +63,8 @@ class TestZeptoParser:
     def test_field_mapping(self, zepto_fixture_data: list[dict]) -> None:
         products = parse_zepto_products(zepto_fixture_data, "Dairy & Bread")
         first = products[0]
-        # Stable hash ID: 16-char hex derived from name+unit
-        assert len(first.platform_product_id) == 16
-        assert first.platform_product_id.isalnum()
+        # Real product ID from fixture (pvid string)
+        assert first.platform_product_id == "z-31001"
         assert first.name == "Amul Taaza Toned Milk"
         assert first.brand == "Amul"  # brand_name → brand
         assert first.unit == "500 ml"  # unit_quantity → unit
@@ -94,9 +92,8 @@ class TestInstamartParser:
     def test_field_mapping(self, instamart_fixture_data: list[dict]) -> None:
         products = parse_instamart_products(instamart_fixture_data, "Dairy & Bread")
         first = products[0]
-        # Stable hash ID: 16-char hex derived from name+unit
-        assert len(first.platform_product_id) == 16
-        assert first.platform_product_id.isalnum()
+        # Real product ID from fixture
+        assert first.platform_product_id == "im-5001"
         assert first.name == "Amul Taaza Homogenised Toned Milk"
         assert first.brand == "Amul"
         assert first.unit == "500 ml"  # packSize → unit

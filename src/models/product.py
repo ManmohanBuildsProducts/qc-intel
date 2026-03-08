@@ -45,6 +45,7 @@ class ScrapedProduct(BaseModel):
     mrp: float | None = None
     in_stock: bool = True
     max_cart_qty: int = 0
+    inventory_count: int | None = None
     raw_json: str | None = None
 
     @field_validator("price")
@@ -91,6 +92,7 @@ class ProductObservation(BaseModel):
     mrp: float | None = None
     in_stock: bool = True
     max_cart_qty: int = 0
+    inventory_count: int | None = None
     time_of_day: TimeOfDay
     observed_at: datetime | None = None
     raw_json: str | None = None

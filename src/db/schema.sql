@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS product_observations (
     mrp REAL,
     in_stock INTEGER NOT NULL DEFAULT 1,
     max_cart_qty INTEGER NOT NULL DEFAULT 0,
+    inventory_count INTEGER,
     time_of_day TEXT NOT NULL CHECK(time_of_day IN ('morning','night')),
     observed_at TEXT NOT NULL DEFAULT (datetime('now')),
     raw_json TEXT
