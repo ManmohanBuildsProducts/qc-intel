@@ -3,10 +3,15 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+const intelligenceItems = [
+  { href: "/brand", label: "Brand HQ", icon: "◆" },
+  { href: "/category", label: "Category Intel", icon: "▦" },
+];
+
 const navItems = [
-  { href: "/", label: "Dashboard", icon: "|||" },
-  { href: "/reports", label: "Reports", icon: "doc" },
+  { href: "/", label: "Overview", icon: "|||" },
   { href: "/explorer", label: "Explorer", icon: "tbl" },
+  { href: "/reports", label: "AI Reports", icon: "doc" },
 ];
 
 export default function Sidebar() {
@@ -21,6 +26,29 @@ export default function Sidebar() {
         <p className="text-xs text-gray-500">Quick Commerce Intelligence</p>
       </div>
       <nav className="flex-1 px-3 py-4">
+        <div className="mb-1 px-3 text-[10px] font-semibold uppercase tracking-widest text-gray-600">
+          Intelligence
+        </div>
+        {intelligenceItems.map((item) => {
+          const active = pathname === item.href || pathname.startsWith(item.href + "/");
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={`mb-1 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+                active
+                  ? "bg-gray-800 text-emerald-500"
+                  : "text-gray-400 hover:bg-gray-800/50 hover:text-gray-200"
+              }`}
+            >
+              <span className="font-mono text-xs">{item.icon}</span>
+              {item.label}
+            </Link>
+          );
+        })}
+        <div className="mb-1 mt-4 px-3 text-[10px] font-semibold uppercase tracking-widest text-gray-600">
+          Data
+        </div>
         {navItems.map((item) => {
           const active = pathname === item.href;
           return (

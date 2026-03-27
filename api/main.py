@@ -7,7 +7,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routers import charts, data, metrics, reports
+from api.routers import charts, data, intelligence, metrics, reports
 
 app = FastAPI(title="QC Intel API")
 
@@ -26,6 +26,7 @@ app.include_router(data.router, prefix="/api")
 app.include_router(charts.router, prefix="/api")
 app.include_router(reports.router, prefix="/api")
 app.include_router(metrics.router, prefix="/api")
+app.include_router(intelligence.router, prefix="/api")
 
 
 @app.get("/api/health")

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import FilterBar from "@/components/FilterBar";
 import ProductTable from "@/components/ProductTable";
 import PriceDistributionChart from "@/components/charts/PriceDistributionChart";
@@ -62,7 +63,14 @@ export default function ExplorerPage() {
       <div>
         <h2 className="text-2xl font-bold text-gray-100">Data Explorer</h2>
         <p className="text-sm text-gray-400">
-          Browse and filter product data across platforms
+          Browse and filter product data across platforms.{" "}
+          <Link
+            href="/brand"
+            className="text-emerald-500 hover:text-emerald-400"
+          >
+            Brand HQ
+          </Link>{" "}
+          for competitive analysis.
         </p>
       </div>
 

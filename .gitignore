@@ -1,4 +1,5 @@
 data/
+logs/
 *.db
 *.db-wal
 *.db-shm
@@ -11,3 +12,6 @@ __pycache__/
 dist/
 build/
 .ruff_cache/
+
+.DS_Store
+/reports/

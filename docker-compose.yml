@@ -13,6 +13,19 @@ services:
       - QC_ALLOWED_ORIGINS=${QC_ALLOWED_ORIGINS:-http://localhost:3000}
     restart: unless-stopped
 
+  scheduler:
+    build: .
+    command: python scripts/scheduler.py
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - QC_DB_PATH=/app/data/qc_intel.db
+    restart: unless-stopped
+    depends_on:
+      - api
+
   web:
     image: node:20-alpine
     working_dir: /app

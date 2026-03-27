@@ -225,3 +225,292 @@ def brand_metrics(
         "all_competitors": all_competitors,
         "canonical_competitors": canonical_competitors,
     })
+
+
+@router.get("/brand/{brand}/scorecard")
+def brand_scorecard(
+    brand: str,
+    conn: sqlite3.Connection = Depends(get_db),
+) -> ApiResponse:
+    """Brand overview across ALL categories — the single-screen answer."""
+    # All SKUs for this brand with latest observations
+    rows = conn.execute(
+        "SELECT pc.id, pc.platform, pc.category, po.price, po.mrp "
+        "FROM product_catalog pc "
+        "LEFT JOIN ("
+        "  SELECT catalog_id, price, mrp "
+        "  FROM product_observations "
+        "  WHERE id IN (SELECT MAX(id) FROM product_observations GROUP BY catalog_id)"
+        ") po ON pc.id = po.catalog_id "
+        "WHERE pc.brand = ?",
+        [brand],
+    ).fetchall()
+
+    total_skus = len(rows)
+    categories = sorted(set(r["category"] for r in rows if r["category"]))
+    platforms = sorted(set(r["platform"] for r in rows if r["platform"]))
+
+    # Platform SKU counts
+    platform_skus: dict[str, int] = {}
+    for r in rows:
+        platform_skus[r["platform"]] = platform_skus.get(r["platform"], 0) + 1
+    # Ensure all 3 platforms appear
+    for p in ("blinkit", "zepto", "instamart"):
+        platform_skus.setdefault(p, 0)
+
+    # Avg discount
+    discounts = []
+    for r in rows:
+        if r["price"] is not None and r["mrp"] is not None and r["mrp"] > 0:
+            d = (r["mrp"] - r["price"]) / r["mrp"] * 100
+            if d > 0:
+                discounts.append(d)
+    avg_discount = round(sum(discounts) / len(discounts), 1) if discounts else 0.0
+
+    # Price range
+    prices = [r["price"] for r in rows if r["price"] is not None]
+    price_range = {
+        "min": min(prices) if prices else 0,
+        "max": max(prices) if prices else 0,
+    }
+
+    # Per-category breakdown
+    cat_details = []
+    for cat in categories:
+        # All SKUs in this category (all brands)
+        cat_all = conn.execute(
+            "SELECT pc.id, pc.brand, pc.platform, po.price, po.mrp "
+            "FROM product_catalog pc "
+            "LEFT JOIN ("
+            "  SELECT catalog_id, price, mrp "
+            "  FROM product_observations "
+            "  WHERE id IN (SELECT MAX(id) FROM product_observations GROUP BY catalog_id)"
+            ") po ON pc.id = po.catalog_id "
+            "WHERE pc.category = ?",
+            [cat],
+        ).fetchall()
+
+        cat_total = len(cat_all)
+        brand_cat_rows = [r for r in cat_all if r["brand"] == brand]
+        brand_sku_count = len(brand_cat_rows)
+        share_pct = round(brand_sku_count / cat_total * 100, 1) if cat_total else 0.0
+
+        # Rank
+        cat_brand_counts: dict[str, int] = {}
+        for r in cat_all:
+            if r["brand"]:
+                cat_brand_counts[r["brand"]] = cat_brand_counts.get(r["brand"], 0) + 1
+        my_count = cat_brand_counts.get(brand, 0)
+        cat_rank = sum(1 for c in cat_brand_counts.values() if c > my_count) + 1
+
+        # Platforms
+        brand_platforms = sorted(set(r["platform"] for r in brand_cat_rows))
+        all_platforms = {"blinkit", "zepto", "instamart"}
+        missing = sorted(all_platforms - set(brand_platforms))
+
+        # Avg prices
+        brand_prices = [r["price"] for r in brand_cat_rows if r["price"] is not None]
+        cat_prices = [r["price"] for r in cat_all if r["price"] is not None]
+        avg_price = round(sum(brand_prices) / len(brand_prices), 1) if brand_prices else 0.0
+        cat_avg_price = round(sum(cat_prices) / len(cat_prices), 1) if cat_prices else 0.0
+
+        # Avg discount
+        brand_disc = []
+        cat_disc = []
+        for r in brand_cat_rows:
+            if r["price"] and r["mrp"] and r["mrp"] > 0:
+                d = (r["mrp"] - r["price"]) / r["mrp"] * 100
+                if d > 0:
+                    brand_disc.append(d)
+        for r in cat_all:
+            if r["price"] and r["mrp"] and r["mrp"] > 0:
+                d = (r["mrp"] - r["price"]) / r["mrp"] * 100
+                if d > 0:
+                    cat_disc.append(d)
+
+        cat_details.append({
+            "category": cat,
+            "sku_count": brand_sku_count,
+            "category_total": cat_total,
+            "share_pct": share_pct,
+            "rank": cat_rank,
+            "total_brands": len(cat_brand_counts),
+            "platforms": brand_platforms,
+            "missing_platforms": missing,
+            "avg_price": avg_price,
+            "category_avg_price": cat_avg_price,
+            "avg_discount_pct": round(sum(brand_disc) / len(brand_disc), 1) if brand_disc else 0.0,
+            "category_avg_discount_pct": round(sum(cat_disc) / len(cat_disc), 1) if cat_disc else 0.0,
+        })
+
+    return ApiResponse(data={
+        "brand": brand,
+        "total_skus": total_skus,
+        "category_count": len(categories),
+        "platform_count": len(platforms),
+        "platform_skus": platform_skus,
+        "avg_discount_pct": avg_discount,
+        "price_range": price_range,
+        "categories": cat_details,
+    })
+
+
+@router.get("/brand/{brand}/gaps")
+def brand_gaps(
+    brand: str,
+    category: str = Query(...),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> ApiResponse:
+    """Distribution gaps — which platforms carry each product."""
+    all_platforms = ["blinkit", "zepto", "instamart"]
+
+    # Get brand products in category with latest prices
+    rows = conn.execute(
+        "SELECT pc.id, pc.platform, pc.name, po.price "
+        "FROM product_catalog pc "
+        "LEFT JOIN ("
+        "  SELECT catalog_id, price "
+        "  FROM product_observations "
+        "  WHERE id IN (SELECT MAX(id) FROM product_observations GROUP BY catalog_id)"
+        ") po ON pc.id = po.catalog_id "
+        "WHERE pc.brand = ? AND pc.category = ?",
+        [brand, category],
+    ).fetchall()
+
+    # Try canonical matching first
+    canonical_rows = conn.execute(
+        "SELECT cp.id AS canonical_id, cp.canonical_name, "
+        "  pc.platform, po.price "
+        "FROM canonical_products cp "
+        "JOIN product_mappings pm ON pm.canonical_id = cp.id "
+        "JOIN product_catalog pc ON pm.catalog_id = pc.id "
+        "LEFT JOIN ("
+        "  SELECT catalog_id, price "
+        "  FROM product_observations "
+        "  WHERE id IN (SELECT MAX(id) FROM product_observations GROUP BY catalog_id)"
+        ") po ON po.catalog_id = pc.id "
+        "WHERE cp.brand = ? AND cp.category = ?",
+        [brand, category],
+    ).fetchall()
+
+    # Build platform matrix from canonical products
+    canonical_map: dict[str, dict] = {}
+    matched_catalog_ids: set[int] = set()
+
+    for r in canonical_rows:
+        cname = r["canonical_name"]
+        if cname not in canonical_map:
+            canonical_map[cname] = {"product_name": cname}
+            for p in all_platforms:
+                canonical_map[cname][p] = {"present": False, "price": None}
+        plat = r["platform"]
+        canonical_map[cname][plat] = {"present": True, "price": r["price"]}
+
+    # Add unmatched (single-platform) products
+    # Get catalog IDs that ARE mapped
+    if canonical_rows:
+        mapped_ids_rows = conn.execute(
+            "SELECT pm.catalog_id "
+            "FROM product_mappings pm "
+            "JOIN product_catalog pc ON pm.catalog_id = pc.id "
+            "WHERE pc.brand = ? AND pc.category = ?",
+            [brand, category],
+        ).fetchall()
+        matched_catalog_ids = {r["catalog_id"] for r in mapped_ids_rows}
+
+    for r in rows:
+        if r["id"] not in matched_catalog_ids:
+            name = r["name"]
+            entry: dict = {"product_name": name}
+            for p in all_platforms:
+                entry[p] = {"present": False, "price": None}
+            entry[r["platform"]] = {"present": True, "price": r["price"]}
+            canonical_map[name] = entry
+
+    # Build matrix and summary
+    matrix = list(canonical_map.values())
+    for item in matrix:
+        item["gap_count"] = sum(1 for p in all_platforms if not item[p]["present"])
+
+    # Sort: most gaps first
+    matrix.sort(key=lambda x: -x["gap_count"])
+
+    on_all = sum(1 for m in matrix if m["gap_count"] == 0)
+    on_two = sum(1 for m in matrix if m["gap_count"] == 1)
+    on_one = sum(1 for m in matrix if m["gap_count"] == 2)
+
+    platform_gaps: dict[str, int] = {}
+    for p in all_platforms:
+        platform_gaps[p] = sum(1 for m in matrix if not m[p]["present"])
+
+    return ApiResponse(data={
+        "brand": brand,
+        "category": category,
+        "platform_matrix": matrix,
+        "summary": {
+            "total_products": len(matrix),
+            "on_all": on_all,
+            "on_two": on_two,
+            "on_one": on_one,
+            "platform_gaps": platform_gaps,
+        },
+    })
+
+
+@router.get("/brand/{brand}/discount-battle")
+def discount_battle(
+    brand: str,
+    category: str = Query(...),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> ApiResponse:
+    """Discount intensity ranking — are competitors discounting more aggressively?"""
+    rows = conn.execute(
+        "SELECT pc.brand, po.price, po.mrp "
+        "FROM product_catalog pc "
+        "LEFT JOIN ("
+        "  SELECT catalog_id, price, mrp "
+        "  FROM product_observations "
+        "  WHERE id IN (SELECT MAX(id) FROM product_observations GROUP BY catalog_id)"
+        ") po ON pc.id = po.catalog_id "
+        "WHERE pc.category = ?",
+        [category],
+    ).fetchall()
+
+    # Group by brand
+    brand_data: dict[str, list[dict]] = {}
+    for r in rows:
+        b = r["brand"]
+        if b:
+            brand_data.setdefault(b, []).append(r)
+
+    brands_result = []
+    all_discounts = []
+    for b, b_rows in brand_data.items():
+        discounts = []
+        discounted_count = 0
+        for r in b_rows:
+            if r["price"] is not None and r["mrp"] is not None and r["mrp"] > 0:
+                d = (r["mrp"] - r["price"]) / r["mrp"] * 100
+                if d > 0:
+                    discounts.append(d)
+                    discounted_count += 1
+                    all_discounts.append(d)
+        avg_disc = round(sum(discounts) / len(discounts), 1) if discounts else 0.0
+        disc_pct = round(discounted_count / len(b_rows) * 100, 1) if b_rows else 0.0
+        brands_result.append({
+            "brand": b,
+            "is_target": b == brand,
+            "avg_discount_pct": avg_disc,
+            "discounted_sku_pct": disc_pct,
+            "sku_count": len(b_rows),
+        })
+
+    # Sort by avg discount descending
+    brands_result.sort(key=lambda x: -x["avg_discount_pct"])
+
+    cat_avg = round(sum(all_discounts) / len(all_discounts), 1) if all_discounts else 0.0
+
+    return ApiResponse(data={
+        "brands": brands_result,
+        "category_avg_discount": cat_avg,
+    })

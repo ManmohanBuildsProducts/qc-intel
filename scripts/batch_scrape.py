@@ -39,30 +39,52 @@ async def run_batch(
     pincodes: list[str],
     platforms: list[Platform],
     time_of_day: TimeOfDay,
+    parallel_platforms: bool = False,
 ) -> dict:
-    """Run scrape for all combinations, returning a summary."""
+    """Run scrape for all combinations, returning a summary.
+
+    When parallel_platforms=True, all platforms for a given (category, pincode)
+    are scraped concurrently — ~3x faster, safe because they hit different domains.
+    """
     orch = PipelineOrchestrator()
     total = len(categories) * len(pincodes) * len(platforms)
-    done = 0
     errors = 0
     total_products = 0
+    batch_num = 0
 
     for category in categories:
         for pincode in pincodes:
-            for platform in platforms:
-                done += 1
-                label = f"[{done}/{total}] {platform.value}/{category}/{pincode}"
-                logger.info("Starting %s", label)
-                try:
-                    run = await orch.run_scrape(platform, pincode, category, time_of_day)
-                    total_products += run.products_found
-                    logger.info(
-                        "Done %s — %d products, %d errors",
-                        label, run.products_found, run.errors,
-                    )
-                except Exception as e:
-                    errors += 1
-                    logger.error("FAILED %s — %s", label, e)
+            if parallel_platforms:
+                batch_num += 1
+                label = f"[batch {batch_num}] {category}/{pincode} × {len(platforms)} platforms"
+                logger.info("Starting %s (parallel)", label)
+
+                async def _scrape(platform: Platform, cat: str = category, pin: str = pincode) -> object:
+                    return await orch.run_scrape(platform, pin, cat, time_of_day)
+
+                results = await asyncio.gather(*[_scrape(p) for p in platforms], return_exceptions=True)
+                for platform, result in zip(platforms, results):
+                    if isinstance(result, Exception):
+                        errors += 1
+                        logger.error("FAILED %s/%s/%s — %s", platform.value, category, pincode, result)
+                    else:
+                        total_products += result.products_found
+                        logger.info(
+                            "Done %s/%s/%s — %d products",
+                            platform.value, category, pincode, result.products_found,
+                        )
+            else:
+                for platform in platforms:
+                    batch_num += 1
+                    label = f"[{batch_num}/{total}] {platform.value}/{category}/{pincode}"
+                    logger.info("Starting %s", label)
+                    try:
+                        run = await orch.run_scrape(platform, pincode, category, time_of_day)
+                        total_products += run.products_found
+                        logger.info("Done %s — %d products, %d errors", label, run.products_found, run.errors)
+                    except Exception as e:
+                        errors += 1
+                        logger.error("FAILED %s — %s", label, e)
 
     return {
         "total_runs": total,

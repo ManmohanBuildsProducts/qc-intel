@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import BrandCategorySelector from "@/components/BrandCategorySelector";
 import BrandMetricsPanel from "@/components/BrandMetricsPanel";
 import ReportViewer from "@/components/ReportViewer";
@@ -90,9 +91,15 @@ export default function ReportsPage() {
   return (
     <div className="space-y-8">
       <div>
-        <h2 className="text-2xl font-bold text-gray-100">Brand Intelligence</h2>
+        <h2 className="text-2xl font-bold text-gray-100">AI Reports</h2>
         <p className="text-sm text-gray-400">
-          Enter any brand to discover opportunities, white spaces, and competitive gaps
+          Generate Gemini-powered deep dives — competitive analysis, white spaces, and strategic recommendations
+        </p>
+        <p className="text-xs text-gray-600 mt-1">
+          For interactive dashboards, use{" "}
+          <a href="/brand" className="text-emerald-500 hover:text-emerald-400">
+            Brand HQ
+          </a>
         </p>
       </div>
 
@@ -134,6 +141,12 @@ export default function ReportsPage() {
                 {report.product_count} products across {report.platform_count} platforms
               </span>
             )}
+            <Link
+              href={`/brand/${encodeURIComponent(report.brand)}/${encodeURIComponent(report.category)}`}
+              className="rounded-md border border-emerald-500/20 bg-emerald-500/5 px-2 py-1 text-xs text-emerald-500 hover:bg-emerald-500/10 transition-colors"
+            >
+              Interactive dashboard &rarr;
+            </Link>
           </div>
 
           {/* Brand metrics panel */}

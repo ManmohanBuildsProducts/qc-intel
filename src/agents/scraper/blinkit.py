@@ -1,6 +1,5 @@
 """Blinkit scraper — uses /v1/layout/search API via browser session."""
 
-import json
 import logging
 
 from mcp import ClientSession

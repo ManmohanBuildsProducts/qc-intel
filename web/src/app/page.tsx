@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import StatsCard from "@/components/StatsCard";
 import DoughnutChart from "@/components/charts/DoughnutChart";
 import BarChart from "@/components/charts/BarChart";
@@ -61,7 +62,12 @@ export default function DashboardPage() {
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-bold text-gray-100">Dashboard</h2>
+        <div>
+          <h2 className="text-2xl font-bold text-gray-100">Market Pulse</h2>
+          <p className="text-sm text-gray-500 mt-1">
+            Quick commerce landscape across Blinkit, Zepto & Instamart
+          </p>
+        </div>
         {lastScrape && (
           <span className="text-xs text-gray-500">
             Last scraped: {lastScrape}
@@ -75,12 +81,30 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {/* Brand HQ CTA */}
+      <Link
+        href="/brand"
+        className="block rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-5 transition-colors hover:border-emerald-500/40 hover:bg-emerald-500/10"
+      >
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-emerald-400">
+              Start with your brand
+            </h3>
+            <p className="text-xs text-gray-500 mt-1">
+              Get your full competitive scorecard — distribution gaps, discount positioning, and category rank
+            </p>
+          </div>
+          <span className="text-emerald-500 text-lg shrink-0 ml-4">&rarr;</span>
+        </div>
+      </Link>
+
       {/* Stats */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {stats ? (
           <>
-            <StatsCard icon="P" label="Products" value={stats.products} />
-            <StatsCard icon="B" label="Brands" value={stats.brands} />
+            <StatsCard icon="P" label="Products Tracked" value={stats.products} />
+            <StatsCard icon="B" label="Brands Monitored" value={stats.brands} />
             <StatsCard icon="C" label="Categories" value={stats.categories} />
             <StatsCard icon="#" label="Platforms" value={stats.platforms} />
           </>
@@ -97,14 +121,26 @@ export default function DashboardPage() {
       {/* Category coverage breakdown */}
       {categories.length > 0 && (
         <div className="rounded-xl border border-gray-800 bg-gray-900 p-6">
-          <h3 className="mb-4 text-sm font-semibold uppercase tracking-wider text-gray-400">
-            Category Coverage
-          </h3>
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
+              Category Coverage
+            </h3>
+            <Link
+              href="/category"
+              className="text-xs text-emerald-500 hover:text-emerald-400 transition-colors"
+            >
+              Deep analysis &rarr;
+            </Link>
+          </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
             {categories.map((cat) => (
-              <button
+              <Link
                 key={cat.name}
-                onClick={() => setSelectedCategory(cat.name)}
+                href={`/category?selected=${encodeURIComponent(cat.name)}`}
+                onClick={(e) => {
+                  e.preventDefault();
+                  setSelectedCategory(cat.name);
+                }}
                 className={`rounded-lg border p-3 text-left transition-colors ${
                   selectedCategory === cat.name
                     ? "border-emerald-500/50 bg-emerald-500/10"
@@ -120,7 +156,7 @@ export default function DashboardPage() {
                 <div className="text-xs text-gray-500">
                   {cat.brand_count} brands
                 </div>
-              </button>
+              </Link>
             ))}
           </div>
         </div>
@@ -159,17 +195,25 @@ export default function DashboardPage() {
             <h3 className="text-sm font-semibold text-gray-300">
               Platform Coverage
             </h3>
-            <select
-              value={selectedBrand}
-              onChange={(e) => setSelectedBrand(e.target.value)}
-              className="rounded border border-gray-700 bg-gray-800 px-2 py-1 text-xs text-gray-300 focus:outline-none"
-            >
-              {brands.slice(0, 30).map((b) => (
-                <option key={b.name} value={b.name}>
-                  {b.name}
-                </option>
-              ))}
-            </select>
+            <div className="flex items-center gap-2">
+              <select
+                value={selectedBrand}
+                onChange={(e) => setSelectedBrand(e.target.value)}
+                className="rounded border border-gray-700 bg-gray-800 px-2 py-1 text-xs text-gray-300 focus:outline-none"
+              >
+                {brands.slice(0, 30).map((b) => (
+                  <option key={b.name} value={b.name}>
+                    {b.name}
+                  </option>
+                ))}
+              </select>
+              <Link
+                href={`/brand?selected=${encodeURIComponent(selectedBrand)}`}
+                className="text-[10px] text-emerald-500 hover:text-emerald-400 whitespace-nowrap"
+              >
+                Full scorecard &rarr;
+              </Link>
+            </div>
           </div>
           {platformCoverage ? (
             <BarChart data={platformCoverage} title="" />

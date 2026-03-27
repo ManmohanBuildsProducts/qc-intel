@@ -1,7 +1,12 @@
 import type {
   Brand,
   BrandMetrics,
+  BrandScorecard,
+  BrandGaps,
+  DiscountBattle,
   Category,
+  CategoryLandscape,
+  CategoryWhitespace,
   Product,
   DashboardStats,
   ChartData,
@@ -72,6 +77,40 @@ export function fetchBrandMetrics(
 ): Promise<ApiResponse<BrandMetrics>> {
   const q = new URLSearchParams({ category }).toString();
   return apiFetch(`/brand/${encodeURIComponent(brand)}/metrics?${q}`);
+}
+
+export function fetchBrandScorecard(
+  brand: string
+): Promise<ApiResponse<BrandScorecard>> {
+  return apiFetch(`/brand/${encodeURIComponent(brand)}/scorecard`);
+}
+
+export function fetchBrandGaps(
+  brand: string,
+  category: string
+): Promise<ApiResponse<BrandGaps>> {
+  const q = new URLSearchParams({ category }).toString();
+  return apiFetch(`/brand/${encodeURIComponent(brand)}/gaps?${q}`);
+}
+
+export function fetchDiscountBattle(
+  brand: string,
+  category: string
+): Promise<ApiResponse<DiscountBattle>> {
+  const q = new URLSearchParams({ category }).toString();
+  return apiFetch(`/brand/${encodeURIComponent(brand)}/discount-battle?${q}`);
+}
+
+export function fetchCategoryLandscape(
+  category: string
+): Promise<ApiResponse<CategoryLandscape>> {
+  return apiFetch(`/category/${encodeURIComponent(category)}/landscape`);
+}
+
+export function fetchCategoryWhitespace(
+  category: string
+): Promise<ApiResponse<CategoryWhitespace>> {
+  return apiFetch(`/category/${encodeURIComponent(category)}/whitespace`);
 }
 
 export function generateReport(
