@@ -88,24 +88,26 @@ class InstamartScraper(BaseScraper):
     async def _run_scrape(
         self, session: ClientSession, pincode: str, category: str,
     ) -> list[dict]:
-        """Scrape Instamart: establish session, call POST search API, fallback to snapshot."""
+        """Scrape Instamart via snapshot extraction from rendered search pages.
+
+        Direct API calls (manual fetch) fail because Swiggy uses AWS WAF + SPA-internal
+        auth that cannot be replicated via browser_evaluate. Instead, we navigate to
+        search URLs and extract product data from the rendered accessibility snapshot.
+        The page's own React app handles all auth automatically during navigation.
+        """
         location = get_pincode_location(pincode)
         lat = location.lat if location else 28.4595
         lng = location.lng if location else 77.0266
 
-        # Step 1: Navigate to Swiggy homepage to establish session cookies
+        # Step 1: Navigate to Swiggy homepage to establish session cookies + AWS WAF token
         logger.info("[instamart] Navigating to Swiggy homepage...")
         await self._navigate(session, "https://www.swiggy.com")
         await self._wait(session)
 
-        # Step 2: Navigate to Instamart and set Gurugram location cookies
-        logger.info("[instamart] Navigating to Instamart...")
-        await self._navigate(session, "https://www.swiggy.com/instamart")
-        await self._wait(session)
-
-        # Swiggy reads location from userLocation + _dl cookies (not HttpOnly)
+        # Step 2: Set location cookies on homepage (before navigating to Instamart)
+        # Setting cookies on the Instamart page directly causes "Something went wrong"
         loc_json = (
-            f'{{"address":"","lat":{lat},"lng":{lng},'
+            f'{{"address":"Gurugram","lat":{lat},"lng":{lng},'
             f'"id":"","annotation":"","name":"Gurugram"}}'
         )
         await self._evaluate(session, (
@@ -123,49 +125,12 @@ class InstamartScraper(BaseScraper):
 
         for term in terms:
             logger.info("[instamart] Searching: %s", term)
-
-            # Primary: call search API from within the page (session cookies sent automatically)
-            js = (
-                f'async () => {{ '
-                f'try {{ '
-                f'const r = await fetch('
-                f'"/api/instamart/search/v2?offset=0&ageConsent=false'
-                f'&pageType=INSTAMART_AUTO_SUGGEST_SEARCH_PAGE",'
-                f'{{method:"POST",'
-                f'headers:{{"Content-Type":"application/json",'
-                f'"__fetch_req_type__":"data"}},'
-                f'body:JSON.stringify({{query:"{term}",offset:0}})}}'
-                f'); '
-                f'const d = await r.json(); '
-                f'return JSON.stringify(d); '
-                f'}} catch(e) {{ return "ERROR:" + e.message; }} }}'
-            )
-            raw = await self._evaluate(session, js)
-            parsed = self._parse_json_from_evaluate(raw)
-
-            items: list[dict] = []
-            if parsed and isinstance(parsed, dict):
-                items = self._extract_from_api_response(parsed, category)
-                logger.info("[instamart] API extraction: %d items for '%s'", len(items), term)
-
-            if not items:
-                # Fallback: navigate to search page and parse snapshot
-                url = f"https://www.swiggy.com/instamart/search?custom_back=true&query={term}"
-                await self._navigate(session, url)
-                await self._wait(session)
-                await self._evaluate(
-                    session, '() => { window.scrollTo(0, 1000); return "scrolled"; }',
-                )
-                await self._wait(session)
-                snapshot = await self._snapshot(session)
-                items = self._extract_from_snapshot(snapshot, category)
-                logger.info("[instamart] Snapshot fallback: %d items for '%s'", len(items), term)
+            items = await self._search_and_extract(session, term, category)
 
             for item in items:
                 name = item.get("name", "")
                 if name and name not in seen_names:
                     seen_names.add(name)
-                    # Preserve real id from API — only assign sequential fallback if missing
                     if not item.get("id") or str(item["id"]).startswith("im-"):
                         item["id"] = f"im-{len(all_items) + 1}"
                     all_items.append(item)
@@ -176,6 +141,50 @@ class InstamartScraper(BaseScraper):
             )
 
         return all_items
+
+    async def _search_and_extract(
+        self, session: ClientSession, term: str, category: str,
+    ) -> list[dict]:
+        """Navigate to search URL, wait for products to render, extract via snapshot.
+
+        Includes progressive scrolling and retry logic to handle slow rendering.
+        """
+        url = f"https://www.swiggy.com/instamart/search?custom_back=true&query={term}"
+        await self._navigate(session, url)
+        await self._wait(session)
+
+        # Progressive scroll to trigger lazy loading and wait for render
+        for scroll_y in (500, 1500, 3000):
+            await self._evaluate(
+                session,
+                f'() => {{ window.scrollTo(0, {scroll_y}); return "scrolled"; }}',
+            )
+            await self._wait(session, timeout=2000)
+
+        # Take snapshot and extract
+        snapshot = await self._snapshot(session)
+        items = self._extract_from_snapshot(snapshot, category)
+
+        # Retry once with longer wait if no products found (page may be slow)
+        if not items:
+            logger.info("[instamart] No products on first attempt for '%s', retrying...", term)
+            await self._wait(session, timeout=5000)
+            # Scroll back to top and down again to re-trigger lazy loading
+            await self._evaluate(session, '() => { window.scrollTo(0, 0); return "top"; }')
+            await self._wait(session, timeout=1000)
+            await self._evaluate(
+                session, '() => { window.scrollTo(0, document.body.scrollHeight); return "bottom"; }',
+            )
+            await self._wait(session, timeout=3000)
+            snapshot = await self._snapshot(session)
+            items = self._extract_from_snapshot(snapshot, category)
+
+        if items:
+            logger.info("[instamart] Snapshot extraction: %d items for '%s'", len(items), term)
+        else:
+            logger.warning("[instamart] No products found for '%s' after retry", term)
+
+        return items
 
     @staticmethod
     def _extract_from_api_response(data: dict, category: str) -> list[dict]:
@@ -228,14 +237,15 @@ class InstamartScraper(BaseScraper):
     ) -> list[dict]:
         """Extract products from Instamart accessibility snapshot.
 
-        Each product card has the structure:
+        Each product card has the structure (from Playwright snapshot):
           generic "Delivery in XX MINS" [ref=...]:
-            generic [ref=...]: XX MINS          ← skip
-          generic [ref=...]: <Product Name>      ← 1-2 lines after delivery marker
-          generic [ref=...]: <description>       ← skip
-          ...
-          generic [ref=...]: ₹ <price>           ← within next 15 lines
-          generic [ref=...]: ₹ <mrp>             ← optional (if discounted)
+            generic [ref=...]: XX MINS
+          generic [ref=...]: <Product Name>
+          generic [ref=...]: <description>
+          generic [ref=...]:
+            text: <size>             ← e.g., "500 ml", "1 ltr"
+            img [ref=...]            ← dropdown chevron
+          generic [ref=...]: ₹ <price>
         """
         products = []
         lines = snapshot.split("\n")
@@ -273,15 +283,15 @@ class InstamartScraper(BaseScraper):
             size = None
             for k in range(name_idx + 1, min(name_idx + 16, len(lines))):
                 kline = lines[k]
-                # Size: "text: 500 ml" or "generic [ref=...]: 500 ml"
+                # Size: "text: 500 ml" or "generic [ref=...]: 500 ml" or "generic: 1 ltr"
                 if size is None:
                     sm = re.search(
-                        r"(?:text|generic[^\n:]*):?\s*([\d.]+\s*(?:ml|g|kg|ltr?|pcs?|pack|Piece|piece))\b",
+                        r"(?:text|generic[^\n:]*):?\s*([\d.]+\s*(?:ml|g|kg|ltr?|pcs?|pack|Piece|piece|items?))\b",
                         kline, re.IGNORECASE,
                     )
                     if sm:
                         size = sm.group(1).strip()
-                # Price
+                # Price: "₹ 29" or "₹29"
                 pm = re.search(r"₹\s*(\d+(?:\.\d+)?)", kline)
                 if pm:
                     val = float(pm.group(1))
@@ -295,10 +305,18 @@ class InstamartScraper(BaseScraper):
             if not price:
                 continue
 
+            # Try to extract brand from product name (first word if capitalized)
+            brand = None
+            name_parts = name.split()
+            if len(name_parts) >= 2:
+                first_word = name_parts[0]
+                if first_word[0].isupper() and first_word.isalpha():
+                    brand = first_word
+
             products.append({
                 "id": f"im-{len(products) + 1}",
                 "name": name,
-                "brand": None,
+                "brand": brand,
                 "category": category,
                 "subcategory": None,
                 "packSize": size,
