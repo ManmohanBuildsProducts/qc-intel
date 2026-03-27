@@ -200,6 +200,197 @@ class TestCharts:
         assert chart["datasets"][0]["data"] == []
 
 
+class TestCategoryLandscape:
+    def test_landscape_returns_brands(self, client: TestClient) -> None:
+        resp = client.get("/api/category/Dairy %26 Bread/landscape")
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["category"] == "Dairy & Bread"
+        assert data["total_brands"] >= 2
+        assert data["total_skus"] == 3
+        brands = data["brands"]
+        names = [b["brand"] for b in brands]
+        assert "Amul" in names
+        assert "Mother Dairy" in names
+        amul = next(b for b in brands if b["brand"] == "Amul")
+        assert amul["sku_count"] == 2
+        assert amul["avg_price"] > 0
+        assert "platforms" in amul
+        assert data["price_range"]["min"] > 0
+        assert data["price_range"]["max"] >= data["price_range"]["min"]
+
+    def test_landscape_avg_discount(self, client: TestClient) -> None:
+        resp = client.get("/api/category/Dairy %26 Bread/landscape")
+        data = resp.json()["data"]
+        amul = next(b for b in data["brands"] if b["brand"] == "Amul")
+        # Amul: price=29, mrp=30 → discount ~3.3%
+        assert amul["avg_discount_pct"] > 0
+
+    def test_landscape_empty_category(self, client: TestClient) -> None:
+        resp = client.get("/api/category/Nonexistent/landscape")
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["total_brands"] == 0
+        assert data["total_skus"] == 0
+        assert data["brands"] == []
+
+
+class TestCategoryWhitespace:
+    def test_whitespace_returns_price_bands(self, client: TestClient) -> None:
+        resp = client.get("/api/category/Dairy %26 Bread/whitespace")
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["total_skus"] == 3
+        assert data["total_brands"] >= 2
+        bands = data["price_bands"]
+        assert len(bands) == 10
+        for band in bands:
+            assert "range" in band
+            assert "sku_count" in band
+            assert "brand_count" in band
+            assert "density" in band
+            assert band["density"] in ("sparse", "moderate", "crowded")
+
+    def test_whitespace_empty_category(self, client: TestClient) -> None:
+        resp = client.get("/api/category/Nonexistent/whitespace")
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["price_bands"] == []
+        assert data["total_skus"] == 0
+
+
+class TestBrandMetrics:
+    def test_brand_metrics_share_and_histogram(self, client: TestClient) -> None:
+        resp = client.get("/api/brand/Amul/metrics?category=Dairy+%26+Bread")
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        share = data["share"]
+        assert share["sku_count"] == 2
+        assert share["category_total"] == 3
+        assert share["share_pct"] > 0
+        assert share["rank"] == 1  # Amul has 2 SKUs vs Mother Dairy's 1
+        # Price histogram
+        hist = data["price_histogram"]
+        assert len(hist["labels"]) == 8
+        assert len(hist["brand"]) == 8
+        assert len(hist["category"]) == 8
+        # MRP tiers
+        tiers = data["mrp_tiers"]
+        assert tiers["labels"] == ["Budget", "Mid", "Premium"]
+        assert len(tiers["brand"]) == 3
+        # Discount
+        assert "brand_avg" in data["discount"]
+        assert "category_avg" in data["discount"]
+        # Platform coverage
+        assert "by_platform" in data["platform_coverage"]
+        # Competitors
+        assert len(data["all_competitors"]) >= 2
+        target = next(c for c in data["all_competitors"] if c["is_target"])
+        assert target["brand"] == "Amul"
+
+    def test_brand_metrics_unknown_brand(self, client: TestClient) -> None:
+        resp = client.get("/api/brand/UnknownBrand/metrics?category=Dairy+%26+Bread")
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["share"]["sku_count"] == 0
+        assert data["share"]["share_pct"] == 0.0
+
+
+class TestBrandScorecard:
+    def test_scorecard_overview(self, client: TestClient) -> None:
+        resp = client.get("/api/brand/Amul/scorecard")
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["brand"] == "Amul"
+        assert data["total_skus"] == 2
+        assert data["category_count"] == 1
+        assert data["platform_count"] == 2
+        # Platform SKUs — all 3 platforms present in keys
+        assert "blinkit" in data["platform_skus"]
+        assert "zepto" in data["platform_skus"]
+        assert "instamart" in data["platform_skus"]
+        assert data["platform_skus"]["blinkit"] == 1
+        assert data["platform_skus"]["zepto"] == 1
+        assert data["platform_skus"]["instamart"] == 0
+        # Categories detail
+        cats = data["categories"]
+        assert len(cats) == 1
+        assert cats[0]["category"] == "Dairy & Bread"
+        assert cats[0]["sku_count"] == 2
+        assert cats[0]["share_pct"] > 0
+
+    def test_scorecard_unknown_brand(self, client: TestClient) -> None:
+        resp = client.get("/api/brand/NoBrand/scorecard")
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["total_skus"] == 0
+        assert data["categories"] == []
+
+
+class TestBrandGaps:
+    def test_gaps_matrix(self, client: TestClient) -> None:
+        resp = client.get("/api/brand/Amul/gaps?category=Dairy+%26+Bread")
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["brand"] == "Amul"
+        assert data["category"] == "Dairy & Bread"
+        matrix = data["platform_matrix"]
+        assert len(matrix) >= 1
+        # Each item has platform presence info
+        for item in matrix:
+            assert "product_name" in item
+            assert "gap_count" in item
+            for p in ("blinkit", "zepto", "instamart"):
+                assert p in item
+                assert "present" in item[p]
+        summary = data["summary"]
+        assert summary["total_products"] >= 1
+
+    def test_gaps_unknown_brand(self, client: TestClient) -> None:
+        resp = client.get("/api/brand/NoBrand/gaps?category=Dairy+%26+Bread")
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["platform_matrix"] == []
+        assert data["summary"]["total_products"] == 0
+
+
+class TestDiscountBattle:
+    def test_discount_battle_returns_brands(self, client: TestClient) -> None:
+        resp = client.get("/api/brand/Amul/discount-battle?category=Dairy+%26+Bread")
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        brands = data["brands"]
+        assert len(brands) >= 2
+        names = [b["brand"] for b in brands]
+        assert "Amul" in names
+        amul = next(b for b in brands if b["brand"] == "Amul")
+        assert amul["is_target"] is True
+        assert "avg_discount_pct" in amul
+        assert "discounted_sku_pct" in amul
+        assert "category_avg_discount" in data
+
+    def test_discount_battle_empty_category(self, client: TestClient) -> None:
+        resp = client.get("/api/brand/Amul/discount-battle?category=Nonexistent")
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["brands"] == []
+        assert data["category_avg_discount"] == 0.0
+
+
+class TestPlatformHeatmap:
+    """Test brand metrics platform coverage acts as heatmap data source."""
+
+    def test_platform_coverage_in_metrics(self, client: TestClient) -> None:
+        resp = client.get("/api/brand/Amul/metrics?category=Dairy+%26+Bread")
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        coverage = data["platform_coverage"]
+        assert coverage["total"] == 2
+        assert "by_platform" in coverage
+        assert coverage["by_platform"]["blinkit"] == 1
+        assert coverage["by_platform"]["zepto"] == 1
+
+
 class TestReports:
     def test_generate_report(self, client: TestClient) -> None:
         mock_response = MagicMock()
