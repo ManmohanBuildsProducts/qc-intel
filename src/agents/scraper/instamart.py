@@ -56,8 +56,13 @@ class InstamartScraper(BaseScraper):
         )
 
     async def scrape(self, pincode: str, category: str, time_of_day: TimeOfDay) -> ScrapeRun:
-        """Override to use Chromium — less detectable by Swiggy's WAF than Firefox."""
+        """Override to use Chromium with stealth — less detectable by Swiggy's WAF."""
+        from .base import _stealth_script_path
+
         args = ["@playwright/mcp@latest", "--browser", "chromium"]
+        stealth_path = _stealth_script_path()
+        if os.path.exists(stealth_path):
+            args += ["--init-script", stealth_path]
         proxy_url = os.environ.get("QC_PROXY_URL")
         if proxy_url:
             args += ["--proxy-server", proxy_url]

@@ -16,9 +16,19 @@ from .service import ScrapeService
 logger = logging.getLogger(__name__)
 
 
+def _stealth_script_path() -> str:
+    """Return absolute path to the stealth init script."""
+    return os.path.join(os.path.dirname(__file__), "stealth.js")
+
+
 def _playwright_server(extra_args: list[str] | None = None) -> StdioServerParameters:
-    """Build Playwright MCP server params, injecting proxy if QC_PROXY_URL is set."""
+    """Build Playwright MCP server params with stealth, proxy, and browser config."""
     args = ["@playwright/mcp@latest", "--browser", "firefox", "--headless"]
+    # Stealth: patch navigator.webdriver, plugins, WebGL, etc. before page loads
+    stealth_path = _stealth_script_path()
+    if os.path.exists(stealth_path):
+        args += ["--init-script", stealth_path]
+        logger.debug("[base] Stealth init script: %s", stealth_path)
     proxy_url = os.environ.get("QC_PROXY_URL")
     if proxy_url:
         args += ["--proxy-server", proxy_url]
