@@ -1,5 +1,6 @@
 """Base scraper — deterministic Playwright MCP scraping, no LLM in the loop."""
 
+import asyncio
 import json
 import logging
 import os
@@ -15,13 +16,36 @@ from .service import ScrapeService
 
 logger = logging.getLogger(__name__)
 
+# Retry config: 3 attempts with exponential backoff (2s, 4s, 8s)
+MAX_RETRIES = 3
+BACKOFF_BASE_SECONDS = 2
+
 
 def _stealth_script_path() -> str:
     """Return absolute path to the stealth init script."""
     return os.path.join(os.path.dirname(__file__), "stealth.js")
 
 
-def _playwright_server(extra_args: list[str] | None = None) -> StdioServerParameters:
+def _get_proxy_url(platform: Platform | None = None) -> str | None:
+    """Get proxy URL for a platform, falling back to global QC_PROXY_URL.
+
+    Per-platform proxy config:
+    - Blinkit (Cloudflare): QC_PROXY_URL_BLINKIT
+    - Zepto (Akamai Bot Manager): QC_PROXY_URL_ZEPTO
+    - Instamart (AWS WAF): QC_PROXY_URL_INSTAMART
+    """
+    if platform:
+        platform_var = f"QC_PROXY_URL_{platform.value.upper()}"
+        platform_proxy = os.environ.get(platform_var)
+        if platform_proxy:
+            return platform_proxy
+    return os.environ.get("QC_PROXY_URL")
+
+
+def _playwright_server(
+    extra_args: list[str] | None = None,
+    platform: Platform | None = None,
+) -> StdioServerParameters:
     """Build Playwright MCP server params with stealth, proxy, and browser config."""
     args = ["@playwright/mcp@latest", "--browser", "firefox", "--headless"]
     # Stealth: patch navigator.webdriver, plugins, WebGL, etc. before page loads
@@ -29,10 +53,10 @@ def _playwright_server(extra_args: list[str] | None = None) -> StdioServerParame
     if os.path.exists(stealth_path):
         args += ["--init-script", stealth_path]
         logger.debug("[base] Stealth init script: %s", stealth_path)
-    proxy_url = os.environ.get("QC_PROXY_URL")
+    proxy_url = _get_proxy_url(platform)
     if proxy_url:
         args += ["--proxy-server", proxy_url]
-        logger.info("[base] Using proxy: %s", proxy_url)
+        logger.info("[base] Using proxy for %s: %s", platform.value if platform else "global", proxy_url)
     if extra_args:
         args += extra_args
     return StdioServerParameters(command="npx", args=args)
@@ -75,24 +99,63 @@ class BaseScraper(ABC):
         """Platform-specific scraping logic. Returns list of product dicts."""
 
     async def scrape(self, pincode: str, category: str, time_of_day: TimeOfDay) -> ScrapeRun:
-        """Run the scraper: open browser, extract products, persist."""
-        async with stdio_client(_playwright_server()) as (read, write):
+        """Run the scraper with exponential backoff retry for transient failures.
+
+        Retries up to MAX_RETRIES times with delays of 2s, 4s, 8s.
+        Only retries on transient errors (connection, timeout, empty results).
+        """
+        last_error: Exception | None = None
+
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                items = await self._scrape_once(pincode, category)
+
+                if not items:
+                    if attempt < MAX_RETRIES:
+                        delay = BACKOFF_BASE_SECONDS ** attempt
+                        logger.warning(
+                            "[%s] Empty results on attempt %d/%d, retrying in %ds...",
+                            self.platform.value, attempt, MAX_RETRIES, delay,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    from src.models.exceptions import ScrapeError
+                    raise ScrapeError(self.platform.value, "Scraper returned no products after retries")
+
+                logger.info(
+                    "[%s] Scraped %d products for %s/%s (attempt %d)",
+                    self.platform.value, len(items), pincode, category, attempt,
+                )
+                return self.service.process_scrape_results(items, self.platform, pincode, category, time_of_day)
+
+            except Exception as e:
+                last_error = e
+                # Don't retry on non-transient errors (config, auth, etc.)
+                from src.models.exceptions import ScrapeError
+                if attempt >= MAX_RETRIES:
+                    raise
+                delay = BACKOFF_BASE_SECONDS ** attempt
+                logger.warning(
+                    "[%s] Attempt %d/%d failed: %s. Retrying in %ds...",
+                    self.platform.value, attempt, MAX_RETRIES, str(e)[:200], delay,
+                )
+                await asyncio.sleep(delay)
+
+        # Should not reach here, but satisfy type checker
+        raise last_error  # type: ignore[misc]
+
+    async def _scrape_once(self, pincode: str, category: str) -> list[dict]:
+        """Single scrape attempt: open browser, extract products."""
+        async with stdio_client(_playwright_server(platform=self.platform)) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 try:
-                    items = await self._run_scrape(session, pincode, category)
+                    return await self._run_scrape(session, pincode, category)
                 finally:
                     try:
                         await session.call_tool("browser_close", {})
                     except Exception:
                         pass
-
-        if not items:
-            from src.models.exceptions import ScrapeError
-            raise ScrapeError(self.platform.value, "Scraper returned no products")
-
-        logger.info("[%s] Scraped %d products for %s/%s", self.platform.value, len(items), pincode, category)
-        return self.service.process_scrape_results(items, self.platform, pincode, category, time_of_day)
 
     # --- Helpers for subclasses ---
 

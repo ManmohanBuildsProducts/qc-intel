@@ -8,7 +8,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from src.config.settings import get_pincode_location
-from src.models.product import Platform, ScrapeRun, TimeOfDay
+from src.models.product import Platform
 
 from .base import BaseScraper
 
@@ -55,15 +55,15 @@ class InstamartScraper(BaseScraper):
             f"?custom_back=true&query={query.replace(' ', '+')}"
         )
 
-    async def scrape(self, pincode: str, category: str, time_of_day: TimeOfDay) -> ScrapeRun:
+    async def _scrape_once(self, pincode: str, category: str) -> list[dict]:
         """Override to use Chromium with stealth — less detectable by Swiggy's WAF."""
-        from .base import _stealth_script_path
+        from .base import _get_proxy_url, _stealth_script_path
 
         args = ["@playwright/mcp@latest", "--browser", "chromium"]
         stealth_path = _stealth_script_path()
         if os.path.exists(stealth_path):
             args += ["--init-script", stealth_path]
-        proxy_url = os.environ.get("QC_PROXY_URL")
+        proxy_url = _get_proxy_url(self.platform)
         if proxy_url:
             args += ["--proxy-server", proxy_url]
         server = StdioServerParameters(command="npx", args=args)
@@ -71,24 +71,12 @@ class InstamartScraper(BaseScraper):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 try:
-                    items = await self._run_scrape(session, pincode, category)
+                    return await self._run_scrape(session, pincode, category)
                 finally:
                     try:
                         await session.call_tool("browser_close", {})
                     except Exception:
                         pass
-
-        if not items:
-            from src.models.exceptions import ScrapeError
-            raise ScrapeError(self.platform.value, "Scraper returned no products")
-
-        logger.info(
-            "[%s] Scraped %d products for %s/%s",
-            self.platform.value, len(items), pincode, category,
-        )
-        return self.service.process_scrape_results(
-            items, self.platform, pincode, category, time_of_day,
-        )
 
     async def _run_scrape(
         self, session: ClientSession, pincode: str, category: str,
