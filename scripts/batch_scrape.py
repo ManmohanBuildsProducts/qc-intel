@@ -23,7 +23,7 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.config.settings import DEFAULT_CATEGORIES, SEED_PINCODES, settings
+from src.config.settings import DEFAULT_CATEGORIES, JAIPUR_SEED_PINCODES, SEED_PINCODES
 from src.models.product import Platform, TimeOfDay
 from src.orchestrator import PipelineOrchestrator
 
@@ -34,61 +34,124 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def _scrape_pincode(
+    orch: PipelineOrchestrator,
+    category: str,
+    pincode: str,
+    platforms: list[Platform],
+    time_of_day: TimeOfDay,
+    parallel_platforms: bool,
+    semaphore: asyncio.Semaphore,
+) -> tuple[int, int]:
+    """Scrape one (category, pincode) combo. Returns (products, errors).
+
+    When parallel_platforms=True, Blinkit runs first (needs Firefox exclusively),
+    then Zepto + Instamart run concurrently (Firefox + Chromium, no conflict).
+    """
+    async with semaphore:
+        products = 0
+        errors = 0
+        if parallel_platforms:
+            label = f"{category}/{pincode}"
+
+            # Phase 1: Blinkit first (Firefox-only, can't share)
+            blinkit_platforms = [p for p in platforms if p == Platform.BLINKIT]
+            other_platforms = [p for p in platforms if p != Platform.BLINKIT]
+
+            for platform in blinkit_platforms:
+                plabel = f"{platform.value}/{label}"
+                logger.info("Starting %s (sequential — Firefox lock)", plabel)
+                try:
+                    run = await orch.run_scrape(platform, pincode, category, time_of_day)
+                    products += run.products_found
+                    logger.info("Done %s — %d products", plabel, run.products_found)
+                except Exception as e:
+                    errors += 1
+                    logger.error("FAILED %s — %s", plabel, e)
+
+            # Phase 2: Zepto + Instamart in parallel (Firefox + Chromium)
+            if other_platforms:
+                logger.info("Starting %s × %d platforms (parallel)", label, len(other_platforms))
+
+                async def _scrape(platform: Platform) -> object:
+                    return await orch.run_scrape(platform, pincode, category, time_of_day)
+
+                results = await asyncio.gather(
+                    *[_scrape(p) for p in other_platforms], return_exceptions=True,
+                )
+                for platform, result in zip(other_platforms, results):
+                    if isinstance(result, Exception):
+                        errors += 1
+                        logger.error("FAILED %s/%s — %s", platform.value, label, result)
+                    else:
+                        products += result.products_found
+                        logger.info(
+                            "Done %s/%s — %d products",
+                            platform.value, label, result.products_found,
+                        )
+        else:
+            for platform in platforms:
+                plabel = f"{platform.value}/{category}/{pincode}"
+                logger.info("Starting %s", plabel)
+                try:
+                    run = await orch.run_scrape(platform, pincode, category, time_of_day)
+                    products += run.products_found
+                    logger.info("Done %s — %d products, %d errors", plabel, run.products_found, run.errors)
+                except Exception as e:
+                    errors += 1
+                    logger.error("FAILED %s — %s", plabel, e)
+        return products, errors
+
+
 async def run_batch(
     categories: list[str],
     pincodes: list[str],
     platforms: list[Platform],
     time_of_day: TimeOfDay,
     parallel_platforms: bool = False,
+    concurrency: int = 1,
 ) -> dict:
     """Run scrape for all combinations, returning a summary.
 
-    When parallel_platforms=True, all platforms for a given (category, pincode)
-    are scraped concurrently — ~3x faster, safe because they hit different domains.
+    Args:
+        parallel_platforms: Scrape all 3 platforms concurrently per (category, pincode).
+        concurrency: Number of pincodes to process concurrently (default 1 = sequential).
     """
     orch = PipelineOrchestrator()
     total = len(categories) * len(pincodes) * len(platforms)
-    errors = 0
-    total_products = 0
-    batch_num = 0
+    semaphore = asyncio.Semaphore(concurrency)
 
+    logger.info(
+        "Concurrency: %d pincodes, parallel_platforms=%s",
+        concurrency, parallel_platforms,
+    )
+
+    tasks = []
     for category in categories:
         for pincode in pincodes:
-            if parallel_platforms:
-                batch_num += 1
-                label = f"[batch {batch_num}] {category}/{pincode} × {len(platforms)} platforms"
-                logger.info("Starting %s (parallel)", label)
+            tasks.append(
+                _scrape_pincode(
+                    orch, category, pincode, platforms, time_of_day,
+                    parallel_platforms, semaphore,
+                )
+            )
 
-                async def _scrape(platform: Platform, cat: str = category, pin: str = pincode) -> object:
-                    return await orch.run_scrape(platform, pin, cat, time_of_day)
+    results = await asyncio.gather(*tasks, return_exceptions=True)
 
-                results = await asyncio.gather(*[_scrape(p) for p in platforms], return_exceptions=True)
-                for platform, result in zip(platforms, results):
-                    if isinstance(result, Exception):
-                        errors += 1
-                        logger.error("FAILED %s/%s/%s — %s", platform.value, category, pincode, result)
-                    else:
-                        total_products += result.products_found
-                        logger.info(
-                            "Done %s/%s/%s — %d products",
-                            platform.value, category, pincode, result.products_found,
-                        )
-            else:
-                for platform in platforms:
-                    batch_num += 1
-                    label = f"[{batch_num}/{total}] {platform.value}/{category}/{pincode}"
-                    logger.info("Starting %s", label)
-                    try:
-                        run = await orch.run_scrape(platform, pincode, category, time_of_day)
-                        total_products += run.products_found
-                        logger.info("Done %s — %d products, %d errors", label, run.products_found, run.errors)
-                    except Exception as e:
-                        errors += 1
-                        logger.error("FAILED %s — %s", label, e)
+    total_products = 0
+    total_errors = 0
+    for result in results:
+        if isinstance(result, Exception):
+            total_errors += len(platforms)
+            logger.error("Pincode batch failed: %s", result)
+        else:
+            products, errors = result
+            total_products += products
+            total_errors += errors
 
     return {
         "total_runs": total,
-        "errors": errors,
+        "errors": total_errors,
         "total_products": total_products,
     }
 
@@ -104,7 +167,11 @@ def build_parser() -> argparse.ArgumentParser:
     # Pincode selection
     pin = parser.add_mutually_exclusive_group()
     pin.add_argument("--pincode", type=str, help="Single pincode (default: 122001)")
-    pin.add_argument("--all-pincodes", action="store_true", help=f"All {len(SEED_PINCODES)} seed pincodes")
+    pin.add_argument("--all-pincodes", action="store_true", help=f"All {len(SEED_PINCODES)} Gurugram seed pincodes")
+    pin.add_argument(
+        "--jaipur", action="store_true",
+        help=f"All {len(JAIPUR_SEED_PINCODES)} Jaipur triple-overlap pincodes",
+    )
 
     # Category selection
     parser.add_argument(
@@ -123,6 +190,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Single platform (default: all 3)",
     )
 
+    # Parallelism
+    parser.add_argument(
+        "--parallel", action="store_true",
+        help="Scrape all platforms concurrently per (category, pincode) — 3x faster",
+    )
+    parser.add_argument(
+        "--concurrency", type=int, default=1,
+        help="Number of pincodes to scrape concurrently (default: 1, recommended: 4)",
+    )
+
     return parser
 
 
@@ -135,6 +212,8 @@ async def main() -> None:
     # Pincodes
     if args.all_pincodes:
         pincodes = SEED_PINCODES
+    elif args.jaipur:
+        pincodes = JAIPUR_SEED_PINCODES
     elif args.pincode:
         pincodes = [args.pincode]
     else:
@@ -147,7 +226,8 @@ async def main() -> None:
         categories = DEFAULT_CATEGORIES
     else:
         # Default: the 6 new categories (skip Dairy/F&V/Snacks which already have data)
-        categories = [c for c in DEFAULT_CATEGORIES if c not in {"Dairy & Bread", "Fruits & Vegetables", "Snacks & Munchies"}]
+        existing = {"Dairy & Bread", "Fruits & Vegetables", "Snacks & Munchies"}
+        categories = [c for c in DEFAULT_CATEGORIES if c not in existing]
 
     # Platforms
     if args.platform:
@@ -165,7 +245,11 @@ async def main() -> None:
     logger.info("Platforms: %s", [p.value for p in platforms])
     logger.info("Time of day: %s", time_of_day.value)
 
-    summary = await run_batch(categories, pincodes, platforms, time_of_day)
+    summary = await run_batch(
+        categories, pincodes, platforms, time_of_day,
+        parallel_platforms=args.parallel,
+        concurrency=args.concurrency,
+    )
 
     logger.info(
         "\n=== BATCH COMPLETE ===\n"

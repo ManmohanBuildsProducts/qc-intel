@@ -59,7 +59,7 @@ class InstamartScraper(BaseScraper):
         """Override to use Chromium with stealth — less detectable by Swiggy's WAF."""
         from .base import _get_proxy_url, _stealth_script_path
 
-        args = ["@playwright/mcp@latest", "--browser", "chromium"]
+        args = ["@playwright/mcp@latest", "--browser", "chromium", "--isolated"]
         stealth_path = _stealth_script_path()
         if os.path.exists(stealth_path):
             args += ["--init-script", stealth_path]

@@ -46,8 +46,14 @@ def _playwright_server(
     extra_args: list[str] | None = None,
     platform: Platform | None = None,
 ) -> StdioServerParameters:
-    """Build Playwright MCP server params with stealth, proxy, and browser config."""
-    args = ["@playwright/mcp@latest", "--browser", "firefox", "--headless"]
+    """Build Playwright MCP server params with stealth, proxy, and browser config.
+
+    Browser selection:
+    - Blinkit → Chromium (avoids Firefox profile lock when running parallel with Zepto)
+    - Zepto → Firefox (default, best stealth)
+    - Instamart → overrides to Chromium in its own _scrape_once()
+    """
+    args = ["@playwright/mcp@latest", "--browser", "firefox", "--headless", "--isolated"]
     # Stealth: patch navigator.webdriver, plugins, WebGL, etc. before page loads
     stealth_path = _stealth_script_path()
     if os.path.exists(stealth_path):

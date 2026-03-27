@@ -37,8 +37,21 @@ GURUGRAM_PINCODES: list[PincodeLocation] = [
     PincodeLocation("122102", 28.3500, 77.0700, "Sohna Town"),
 ]
 
-# Recommended seed pincodes (>80% dark store coverage)
+# Recommended seed pincodes — Gurugram (>80% dark store coverage)
 SEED_PINCODES = ["122001", "122002", "122003", "122008", "122010", "122015", "122018", "122051"]
+
+# Jaipur city pincodes — triple-overlap (Blinkit + Zepto + Instamart confirmed)
+JAIPUR_PINCODES: list[PincodeLocation] = [
+    PincodeLocation("302020", 26.8607, 75.7633, "Mansarovar"),
+    PincodeLocation("302021", 26.9361, 75.7618, "Vaishali Nagar"),
+    PincodeLocation("302017", 26.8549, 75.8243, "Malviya Nagar"),
+    PincodeLocation("302016", 26.9180, 75.7840, "Bani Park / Shastri Nagar"),
+    PincodeLocation("302025", 26.8350, 75.8650, "Jagatpura"),
+    PincodeLocation("302018", 26.8700, 75.8100, "Durgapura"),
+    PincodeLocation("302004", 26.8990, 75.8200, "Raja Park / Jawahar Nagar"),
+]
+
+JAIPUR_SEED_PINCODES = [p.pincode for p in JAIPUR_PINCODES]
 
 # Default scrape categories
 DEFAULT_CATEGORIES = [
@@ -67,8 +80,11 @@ USER_AGENTS = [
 
 
 def get_pincode_location(pincode: str) -> PincodeLocation | None:
-    """Look up lat/lng for a Gurugram pincode."""
+    """Look up lat/lng for a known pincode (Gurugram or Jaipur)."""
     for loc in GURUGRAM_PINCODES:
+        if loc.pincode == pincode:
+            return loc
+    for loc in JAIPUR_PINCODES:
         if loc.pincode == pincode:
             return loc
     return None
