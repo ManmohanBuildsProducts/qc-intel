@@ -21,9 +21,10 @@ from src.models.product import (
 
 logger = logging.getLogger(__name__)
 
-# Thresholds (calibrated for bge-reranker-v2-m3 scores)
+# Thresholds (calibrated for bge-m3 dense scores)
 HIGH_CONFIDENCE_THRESHOLD = 0.85
 AMBIGUOUS_LOWER_THRESHOLD = 0.80
+MRP_TOLERANCE_PCT = 15.0  # reject matches where MRP differs by more than 15%
 
 
 class NormalizerService:
@@ -34,6 +35,36 @@ class NormalizerService:
         self.canonical_repo = CanonicalRepository(conn)
         self.embedder = ProductEmbedder()
         self.kaggle_client = KaggleEmbeddingClient()
+        self._mrp_cache: dict[int, float | None] = {}
+
+    def _get_latest_mrp(self, catalog_id: int) -> float | None:
+        """Get the most recent MRP for a catalog product. Cached per session."""
+        if catalog_id in self._mrp_cache:
+            return self._mrp_cache[catalog_id]
+        row = self.conn.execute(
+            """SELECT mrp FROM product_observations
+               WHERE catalog_id = ? AND mrp > 0
+               ORDER BY observed_at DESC LIMIT 1""",
+            (catalog_id,),
+        ).fetchone()
+        mrp = row[0] if row else None
+        self._mrp_cache[catalog_id] = mrp
+        return mrp
+
+    def _mrp_compatible(self, catalog_id_a: int, catalog_id_b: int) -> bool:
+        """Check if two products have compatible MRPs (within tolerance).
+
+        Returns True if MRPs match within MRP_TOLERANCE_PCT, or if either MRP is missing.
+        """
+        mrp_a = self._get_latest_mrp(catalog_id_a)
+        mrp_b = self._get_latest_mrp(catalog_id_b)
+        if mrp_a is None or mrp_b is None:
+            return True  # Can't verify — allow match
+        min_mrp = min(mrp_a, mrp_b)
+        if min_mrp == 0:
+            return True
+        pct_diff = abs(mrp_a - mrp_b) / min_mrp * 100
+        return pct_diff <= MRP_TOLERANCE_PCT
 
     def normalize_category(
         self,
@@ -138,29 +169,39 @@ class NormalizerService:
 
                 if product.id in best_matches:
                     anchor_id, sim = best_matches[product.id]
-
-                    # Unit mismatch guard
                     anchor = anchor_by_id.get(anchor_id)
+                    reject_reason = None
+
                     if anchor:
+                        # Guard 1: Unit mismatch
                         anchor_unit = normalize_unit(anchor.unit)
                         product_unit = normalize_unit(product.unit)
                         if anchor_unit and product_unit and anchor_unit != product_unit:
-                            logger.debug(
-                                "Unit mismatch — rejecting merge: %s (%s) vs %s (%s)",
-                                anchor.name, anchor_unit, product.name, product_unit,
-                            )
-                        else:
-                            canonical_id = anchor_canonical_ids.get(anchor_id)
-                            if canonical_id:
-                                self.canonical_repo.insert_mapping(
-                                    ProductMapping(
-                                        catalog_id=product.id,
-                                        canonical_id=canonical_id,
-                                        similarity_score=round(sim, 4),
-                                    )
+                            reject_reason = f"unit mismatch ({anchor_unit} vs {product_unit})"
+
+                        # Guard 2: MRP mismatch
+                        if not reject_reason and not self._mrp_compatible(anchor.id, product.id):
+                            mrp_a = self._get_latest_mrp(anchor.id)
+                            mrp_b = self._get_latest_mrp(product.id)
+                            reject_reason = f"MRP mismatch (₹{mrp_a:.0f} vs ₹{mrp_b:.0f})"
+
+                    if reject_reason:
+                        logger.debug(
+                            "Rejecting merge: %s vs %s — %s",
+                            anchor.name if anchor else "?", product.name, reject_reason,
+                        )
+                    else:
+                        canonical_id = anchor_canonical_ids.get(anchor_id)
+                        if canonical_id:
+                            self.canonical_repo.insert_mapping(
+                                ProductMapping(
+                                    catalog_id=product.id,
+                                    canonical_id=canonical_id,
+                                    similarity_score=round(sim, 4),
                                 )
-                                mappings_created += 1
-                                matched = True
+                            )
+                            mappings_created += 1
+                            matched = True
 
                 if not matched:
                     canonical = CanonicalProduct(

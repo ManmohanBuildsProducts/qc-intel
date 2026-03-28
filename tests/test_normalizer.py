@@ -212,6 +212,71 @@ class TestNormalizerService:
         assert result.mappings_created == total_products
 
 
+class TestMRPGuard:
+    def test_mrp_compatible_same_price(self, db_session: sqlite3.Connection) -> None:
+        """Products with same MRP are compatible."""
+        # Insert two products with observations
+        db_session.execute(
+            "INSERT INTO product_catalog (id, platform, platform_product_id, name, brand, category, unit) "
+            "VALUES (901, 'blinkit', 'b1', 'Amul Milk', 'Amul', 'Dairy & Bread', '500ml')"
+        )
+        db_session.execute(
+            "INSERT INTO product_catalog (id, platform, platform_product_id, name, brand, category, unit) "
+            "VALUES (902, 'zepto', 'z1', 'Amul Toned Milk', 'Amul', 'Dairy & Bread', '500ml')"
+        )
+        db_session.execute(
+            "INSERT INTO product_observations (catalog_id, scrape_run_id, pincode, price, mrp, in_stock, time_of_day) "
+            "VALUES (901, 'test-run', '122001', 28, 30, 1, 'morning')"
+        )
+        db_session.execute(
+            "INSERT INTO product_observations (catalog_id, scrape_run_id, pincode, price, mrp, in_stock, time_of_day) "
+            "VALUES (902, 'test-run', '122001', 27, 30, 1, 'morning')"
+        )
+        db_session.commit()
+
+        normalizer = NormalizerService(db_session)
+        assert normalizer._mrp_compatible(901, 902) is True
+
+    def test_mrp_incompatible_different_price(self, db_session: sqlite3.Connection) -> None:
+        """Products with very different MRP are incompatible."""
+        db_session.execute(
+            "INSERT INTO product_catalog (id, platform, platform_product_id, name, brand, category, unit) "
+            "VALUES (903, 'blinkit', 'b2', 'Amul Cream', 'Amul', 'Dairy & Bread', '200ml')"
+        )
+        db_session.execute(
+            "INSERT INTO product_catalog (id, platform, platform_product_id, name, brand, category, unit) "
+            "VALUES (904, 'zepto', 'z2', 'Amul Butter', 'Amul', 'Dairy & Bread', '100g')"
+        )
+        db_session.execute(
+            "INSERT INTO product_observations (catalog_id, scrape_run_id, pincode, price, mrp, in_stock, time_of_day) "
+            "VALUES (903, 'test-run', '122001', 60, 70, 1, 'morning')"
+        )
+        db_session.execute(
+            "INSERT INTO product_observations (catalog_id, scrape_run_id, pincode, price, mrp, in_stock, time_of_day) "
+            "VALUES (904, 'test-run', '122001', 25, 25, 1, 'morning')"
+        )
+        db_session.commit()
+
+        normalizer = NormalizerService(db_session)
+        assert normalizer._mrp_compatible(903, 904) is False
+
+    def test_mrp_missing_allows_match(self, db_session: sqlite3.Connection) -> None:
+        """If MRP is missing for either product, allow the match."""
+        db_session.execute(
+            "INSERT INTO product_catalog (id, platform, platform_product_id, name, brand, category, unit) "
+            "VALUES (905, 'blinkit', 'b3', 'No MRP Product', 'Test', 'Dairy & Bread', '1l')"
+        )
+        db_session.execute(
+            "INSERT INTO product_catalog (id, platform, platform_product_id, name, brand, category, unit) "
+            "VALUES (906, 'zepto', 'z3', 'No MRP Product Z', 'Test', 'Dairy & Bread', '1l')"
+        )
+        # No observations inserted — MRP is missing
+        db_session.commit()
+
+        normalizer = NormalizerService(db_session)
+        assert normalizer._mrp_compatible(905, 906) is True
+
+
 class TestLLMValidation:
     @pytest.mark.asyncio
     async def test_validate_match_yes(self, db_session: sqlite3.Connection) -> None:
