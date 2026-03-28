@@ -9,6 +9,21 @@ Input:  input/catalog.json
 Output: benchmark_results.json, match_results.json
 """
 
+# Install FlagEmbedding if not available (needed for BGE-M3 sparse + reranker)
+import subprocess
+import sys
+
+try:
+    import FlagEmbedding  # noqa: F401
+except ImportError:
+    try:
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "-q", "FlagEmbedding"],
+            timeout=120,
+        )
+    except Exception as e:
+        print(f"Warning: Could not install FlagEmbedding: {e}. BGE-M3 sparse/reranker combos will be skipped.")
+
 import json
 import logging
 import os
@@ -16,6 +31,31 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+# Force offline mode — models loaded from Kaggle Model mounts, not downloaded
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
+# Map model names to Kaggle mount paths
+# Models mount at /kaggle/input/<model-slug>/transformers/default/1/
+# Models uploaded as Kaggle Dataset (sentence-transformers format)
+MODELS_DIR = Path("/kaggle/input/datasets/manmohanbuilds/qc-intel-models")
+if not MODELS_DIR.exists():
+    MODELS_DIR = Path("/kaggle/input/qc-intel-models")  # alt mount
+
+KAGGLE_MODEL_PATHS: dict[str, str] = {
+    "sentence-transformers/all-MiniLM-L6-v2": str(MODELS_DIR / "all-MiniLM-L6-v2"),
+    "BAAI/bge-m3": str(MODELS_DIR / "bge-m3"),
+}
+
+def resolve_model_path(model_name: str) -> str:
+    """Resolve model name to local Kaggle path if available."""
+    kaggle_path = KAGGLE_MODEL_PATHS.get(model_name, "")
+    if kaggle_path and Path(kaggle_path).exists():
+        log.info("Resolved %s → %s (local)", model_name, kaggle_path)
+        return kaggle_path
+    log.warning("Could not resolve %s to local path (tried %s)", model_name, kaggle_path)
+    return model_name
 
 import numpy as np
 
@@ -29,10 +69,18 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-# On Kaggle, datasets mount at /kaggle/input/<dataset-slug>/
-INPUT_DIR = Path("/kaggle/input/qc-intel-catalog")
-if not INPUT_DIR.exists():
-    INPUT_DIR = Path("input")  # Local fallback
+# On Kaggle, datasets mount at /kaggle/input/datasets/<username>/<dataset-slug>/
+# or /kaggle/input/<dataset-slug>/ depending on API version
+_KAGGLE_PATHS = [
+    Path("/kaggle/input/datasets/manmohanbuilds/qc-intel-catalog"),
+    Path("/kaggle/input/qc-intel-catalog"),
+    Path("/kaggle/input/datasets/manmohanbuilds"),
+]
+INPUT_DIR = Path("input")  # fallback
+for _p in _KAGGLE_PATHS:
+    if _p.exists():
+        INPUT_DIR = _p
+        break
 CATALOG_PATH = INPUT_DIR / "catalog.json"
 FIXTURES_PATH = INPUT_DIR / "fixtures_catalog.json"  # Fixtures in same dataset
 BENCHMARK_OUT = Path("benchmark_results.json")
@@ -51,7 +99,7 @@ TOP_K = 5
 # ---------------------------------------------------------------------------
 COMBOS: list[dict[str, Any]] = [
     {
-        "name": "MiniLM-L6-v2",
+        "name": "MiniLM-L6-v2 (baseline)",
         "embedder": "sentence-transformers/all-MiniLM-L6-v2",
         "embedder_type": "sentence_transformers",
         "reranker": None,
@@ -78,27 +126,28 @@ COMBOS: list[dict[str, Any]] = [
         "reranker": "BAAI/bge-reranker-v2-m3",
         "sparse": False,
     },
-    {
-        "name": "Qwen3-Embedding-0.6B",
-        "embedder": "Qwen/Qwen3-Embedding-0.6B",
-        "embedder_type": "sentence_transformers",
-        "reranker": None,
-        "sparse": False,
-    },
-    {
-        "name": "Qwen3-Embedding-0.6B + bge-reranker-v2-m3",
-        "embedder": "Qwen/Qwen3-Embedding-0.6B",
-        "embedder_type": "sentence_transformers",
-        "reranker": "BAAI/bge-reranker-v2-m3",
-        "sparse": False,
-    },
-    {
-        "name": "Vyakyarth",
-        "embedder": "krutrim-ai-labs/Vyakyarth",
-        "embedder_type": "sentence_transformers",
-        "reranker": None,
-        "sparse": False,
-    },
+    # Qwen3 and Vyakyarth require internet for download — add as Kaggle Models when available
+    # {
+    #     "name": "Qwen3-Embedding-0.6B",
+    #     "embedder": "Qwen/Qwen3-Embedding-0.6B",
+    #     "embedder_type": "sentence_transformers",
+    #     "reranker": None,
+    #     "sparse": False,
+    # },
+    # {
+    #     "name": "Qwen3-Embedding-0.6B + bge-reranker-v2-m3",
+    #     "embedder": "Qwen/Qwen3-Embedding-0.6B",
+    #     "embedder_type": "sentence_transformers",
+    #     "reranker": "BAAI/bge-reranker-v2-m3",
+    #     "sparse": False,
+    # },
+    # {
+    #     "name": "Vyakyarth",
+    #     "embedder": "krutrim-ai-labs/Vyakyarth",
+    #     "embedder_type": "sentence_transformers",
+    #     "reranker": None,
+    #     "sparse": False,
+    # },
 ]
 
 # ---------------------------------------------------------------------------
@@ -177,8 +226,9 @@ def load_sentence_transformer(model_name: str) -> Any:
         return _model_cache[model_name]
     from sentence_transformers import SentenceTransformer
 
-    log.info("Loading SentenceTransformer: %s", model_name)
-    model = SentenceTransformer(model_name)
+    resolved = resolve_model_path(model_name)
+    log.info("Loading SentenceTransformer: %s (path=%s)", model_name, resolved)
+    model = SentenceTransformer(resolved)
     _model_cache[model_name] = model
     return model
 
@@ -186,10 +236,14 @@ def load_sentence_transformer(model_name: str) -> Any:
 def load_bge_m3(model_name: str = "BAAI/bge-m3") -> Any:
     if model_name in _model_cache:
         return _model_cache[model_name]
-    from FlagEmbedding import BGEM3FlagModel
-
-    log.info("Loading BGEM3FlagModel: %s", model_name)
-    model = BGEM3FlagModel(model_name, use_fp16=True)
+    resolved = resolve_model_path(model_name)
+    try:
+        from FlagEmbedding import BGEM3FlagModel
+        log.info("Loading BGEM3FlagModel: %s (path=%s)", model_name, resolved)
+        model = BGEM3FlagModel(resolved, use_fp16=True)
+    except ImportError:
+        log.info("FlagEmbedding not available, loading %s via sentence-transformers (dense only)", model_name)
+        model = load_sentence_transformer(model_name)
     _model_cache[model_name] = model
     return model
 
@@ -197,10 +251,13 @@ def load_bge_m3(model_name: str = "BAAI/bge-m3") -> Any:
 def load_reranker(model_name: str = "BAAI/bge-reranker-v2-m3") -> Any:
     if model_name in _model_cache:
         return _model_cache[model_name]
-    from FlagEmbedding import FlagReranker
-
-    log.info("Loading FlagReranker: %s", model_name)
-    model = FlagReranker(model_name, use_fp16=True)
+    resolved = resolve_model_path(model_name)
+    try:
+        from FlagEmbedding import FlagReranker
+        log.info("Loading FlagReranker: %s (path=%s)", model_name, resolved)
+        model = FlagReranker(resolved, use_fp16=True)
+    except ImportError:
+        raise ImportError("FlagEmbedding required for reranker — install with: pip install FlagEmbedding")
     _model_cache[model_name] = model
     return model
 
@@ -219,13 +276,19 @@ def embed_texts(
     """Embed texts and return {'dense': np.ndarray, 'sparse': list | None}."""
     if embedder_type == "flag_embedding":
         model = load_bge_m3(model_name)
-        output = model.encode(texts, return_dense=True, return_sparse=return_sparse)
-        result: dict[str, Any] = {"dense": output["dense_vecs"]}
-        if return_sparse:
-            result["sparse"] = output["lexical_weights"]
+        # Check if model is a BGEM3FlagModel or fell back to SentenceTransformer
+        if hasattr(model, "encode") and "return_dense" in model.encode.__code__.co_varnames:
+            output = model.encode(texts, return_dense=True, return_sparse=return_sparse)
+            result: dict[str, Any] = {"dense": output["dense_vecs"]}
+            if return_sparse:
+                result["sparse"] = output["lexical_weights"]
+            else:
+                result["sparse"] = None
+            return result
         else:
-            result["sparse"] = None
-        return result
+            # Fell back to sentence-transformers — dense only
+            dense = model.encode(texts, convert_to_numpy=True)
+            return {"dense": dense, "sparse": None}
     else:
         model = load_sentence_transformer(model_name)
         dense = model.encode(texts, convert_to_numpy=True)
@@ -273,7 +336,7 @@ def extract_texts(products: list[dict]) -> list[str]:
 
 
 def extract_ids(products: list[dict]) -> list[Any]:
-    return [p.get("id", p.get("platform_product_id", i)) for i in range(len(products))]
+    return [products[i].get("id", products[i].get("platform_product_id", i)) for i in range(len(products))]
 
 
 # ---------------------------------------------------------------------------
@@ -451,30 +514,49 @@ def run_production(catalog: dict[str, Any]) -> dict[str, Any]:
     sim_matrix = cosine_similarity_matrix(corpus_out["dense"], anchor_out["dense"])
     candidates = get_top_k_candidates(sim_matrix, k=TOP_K, floor=COSINE_FLOOR)
 
-    # Rerank — query=corpus(non-anchor), corpus=anchor
-    t1 = time.time()
-    reranker_model = load_reranker(PROD_RERANKER)
-    reranked = rerank_candidates(reranker_model, corpus_texts, anchor_texts, candidates)
-    log.info("Reranking done in %.1fs", time.time() - t1)
+    # Try reranking if FlagEmbedding available
+    reranked = None
+    try:
+        t1 = time.time()
+        reranker_model = load_reranker(PROD_RERANKER)
+        reranked = rerank_candidates(reranker_model, corpus_texts, anchor_texts, candidates)
+        log.info("Reranking done in %.1fs", time.time() - t1)
+    except ImportError:
+        log.warning("Reranker not available — using dense similarity only")
 
     # Build output — query=non-anchor product, corpus=anchor product
     matches: list[dict[str, Any]] = []
     anchor_ids = extract_ids(anchor_products)
     corpus_ids = extract_ids(corpus_products)
 
-    for qi_results in reranked:
-        for r in qi_results:
-            qi, ci = r["query_idx"], r["corpus_idx"]
-            matches.append(
-                {
-                    "query_id": corpus_ids[qi],
-                    "query_text": corpus_texts[qi],
-                    "corpus_id": anchor_ids[ci],
-                    "corpus_text": anchor_texts[ci],
-                    "dense_score": r["dense_score"],
-                    "rerank_score": r["rerank_score"],
-                }
-            )
+    if reranked:
+        for qi_results in reranked:
+            for r in qi_results:
+                qi, ci = r["query_idx"], r["corpus_idx"]
+                matches.append(
+                    {
+                        "query_id": corpus_ids[qi],
+                        "query_text": corpus_texts[qi],
+                        "corpus_id": anchor_ids[ci],
+                        "corpus_text": anchor_texts[ci],
+                        "dense_score": r["dense_score"],
+                        "rerank_score": r["rerank_score"],
+                    }
+                )
+    else:
+        # No reranker — use dense cosine similarity as score
+        for qi_candidates in candidates:
+            for qi, ci, score in qi_candidates:
+                matches.append(
+                    {
+                        "query_id": corpus_ids[qi],
+                        "query_text": corpus_texts[qi],
+                        "corpus_id": anchor_ids[ci],
+                        "corpus_text": anchor_texts[ci],
+                        "dense_score": round(score, 4),
+                        "rerank_score": round(score, 4),
+                    }
+                )
 
     # Sort by rerank score descending
     matches.sort(key=lambda x: x["rerank_score"], reverse=True)
@@ -499,6 +581,20 @@ def run_production(catalog: dict[str, Any]) -> dict[str, Any]:
 def main() -> None:
     log.info("QC Intel — Embedding Benchmark & Production Matcher")
     log.info("GPU available: %s", os.environ.get("CUDA_VISIBLE_DEVICES", "not set"))
+
+    # Debug: list /kaggle/input contents
+    kaggle_input = Path("/kaggle/input")
+    if kaggle_input.exists():
+        log.info("Contents of /kaggle/input/: %s", list(kaggle_input.iterdir()))
+        for d in kaggle_input.iterdir():
+            if d.is_dir():
+                log.info("  %s/: %s", d.name, list(d.iterdir())[:10])
+    else:
+        log.info("/kaggle/input does not exist")
+
+    log.info("INPUT_DIR resolved to: %s (exists=%s)", INPUT_DIR, INPUT_DIR.exists())
+    log.info("CATALOG_PATH: %s (exists=%s)", CATALOG_PATH, CATALOG_PATH.exists())
+    log.info("FIXTURES_PATH: %s (exists=%s)", FIXTURES_PATH, FIXTURES_PATH.exists())
 
     # Try to detect GPU
     try:

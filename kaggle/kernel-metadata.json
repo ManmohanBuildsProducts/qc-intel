@@ -7,7 +7,7 @@
   "is_private": true,
   "enable_gpu": true,
   "enable_internet": true,
-  "dataset_sources": ["manmohanbuilds/qc-intel-catalog"],
+  "dataset_sources": ["manmohanbuilds/qc-intel-catalog", "manmohanbuilds/qc-intel-models"],
   "competition_sources": [],
   "kernel_sources": []
 }
