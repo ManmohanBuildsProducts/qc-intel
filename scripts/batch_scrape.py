@@ -200,6 +200,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Number of pincodes to scrape concurrently (default: 1, recommended: 4)",
     )
 
+    # Speed
+    parser.add_argument(
+        "--fast", action="store_true",
+        help="Use XHR-intercepting fast scrapers for Zepto/Instamart (~10x faster)",
+    )
+
     return parser
 
 
@@ -208,6 +214,11 @@ async def main() -> None:
     args = parser.parse_args()
 
     time_of_day = TimeOfDay.MORNING if args.morning else TimeOfDay.NIGHT
+
+    # Fast mode: use XHR-intercepting scrapers
+    if args.fast:
+        import os
+        os.environ["QC_FAST_SCRAPE"] = "1"
 
     # Pincodes
     if args.all_pincodes:
