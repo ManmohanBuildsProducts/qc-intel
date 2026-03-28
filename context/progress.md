@@ -1,12 +1,13 @@
 # QC Intel — Progress Log
 
 ## Current State
-- **Last completed:** WS5 (eval harness, threshold tuning, deployment config)
-- **Next up:** Live scrape end-to-end test on real platforms
-- **Gate status:** WS5 PASSED
-- **Tests:** 184/184 passing (+ eval harness added)
-- **Lint:** ruff clean on all files (0 errors), TypeScript clean
+- **Last completed:** WS6 (embedding upgrade to bge-m3, Kaggle pipeline, MRP guard, all-category normalization)
+- **Next up:** Backlog items in `context/kaggle-backlog.md` (Zepto dedup, LLM judge cleanup, reranker, incremental normalization)
+- **Gate status:** WS6 PASSED
+- **Tests:** 236/236 passing
+- **Lint:** ruff clean on all files (0 errors)
 - **Branch:** main
+- **Normalization:** 5,913/5,913 products mapped across 9 categories, 5,294 canonicals, 1.5% flagged
 
 ## Session History
 
@@ -69,3 +70,22 @@
 - **CORS**: `api/main.py` now reads allowed origins from `QC_ALLOWED_ORIGINS` env var
 - **Scraper verification**: 48/48 scraper tests pass
 - Gate WS5: PASSED — 184/184 tests, ruff clean, deployment files complete
+
+### Session 6 — 2026-03-28 (WS6: embedding upgrade + normalization)
+- **Eval on real data**: Ran normalization eval on existing MiniLM data — F1=1.000 on fixtures, 2.1% flagged
+- **Model research**: Evaluated bge-m3, Qwen3-Embedding-0.6B, Vyakyarth (Krutrim), Sarvam (no embedding model)
+- **Winner**: BAAI/bge-m3 dense (568M params, 1024-dim) — 25% better recall than MiniLM
+- **Kaggle GPU pipeline**: Full end-to-end — export catalog → upload dataset → push kernel → P100 GPU → download results
+  - `kaggle/embed_and_rerank.py`: benchmark notebook (4 combos tested)
+  - `src/embeddings/catalog_export.py`: DB → JSON for Kaggle
+  - `src/embeddings/kaggle_client.py`: push/poll/download client
+  - Models uploaded as Kaggle Dataset (offline mode, no internet needed on GPU)
+  - New CLI flag: `python analyze.py --embed`
+- **MRP guard**: Products with MRP >15% apart rejected as matches (India-specific: MRP is legally fixed by manufacturer)
+  - Kills false positives like "Amul Lactose Free Milk ↔ Amul Fresh Cream"
+  - MRP tolerance analysis: 15% optimal (5% too aggressive, 20% too loose, plateau at 25-30%)
+- **All 9 categories normalized**: 5,913 products → 5,294 canonicals, 100% mapped, 1.5% flagged
+- **Dependencies**: Removed `sentence-transformers` and `scikit-learn` from main deps (Kaggle handles ML)
+- **New files**: 6 new (kaggle notebook, catalog export, kaggle client, 3 test files)
+- **Modified**: normalizer.py, product_embedder.py, settings.py, orchestrator.py, analyze.py, pyproject.toml
+- Gate WS6: PASSED — 236/236 tests (52 new), ruff clean, all categories normalized
