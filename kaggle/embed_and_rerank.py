@@ -635,15 +635,39 @@ def main() -> None:
     else:
         log.info("No fixtures file found — skipping benchmark mode")
 
-    # Production mode — always runs
-    try:
-        production = run_production(catalog)
-        with open(MATCH_OUT, "w") as f:
-            json.dump(production, f, indent=2)
-        log.info("Production results written to %s (%d matches)", MATCH_OUT, production["num_matches"])
-    except Exception as e:
-        log.error("Production mode failed: %s", e)
-        raise
+    # Production mode — process all catalog_*.json files
+    catalog_files = sorted(INPUT_DIR.glob("catalog_*.json"))
+    if not catalog_files:
+        # Fallback: single catalog.json
+        catalog_files = [CATALOG_PATH] if CATALOG_PATH.exists() else []
+
+    log.info("Found %d catalog files to process", len(catalog_files))
+    all_results: dict[str, dict] = {}
+
+    for catalog_file in catalog_files:
+        try:
+            cat = load_catalog(catalog_file)
+            category = cat.get("category", catalog_file.stem)
+            log.info("--- Processing: %s (%s) ---", category, catalog_file.name)
+            production = run_production(cat)
+
+            # Write per-category output
+            slug = catalog_file.stem  # e.g. catalog_dairy_and_bread
+            out_path = Path(f"match_results_{slug.replace('catalog_', '')}.json")
+            with open(out_path, "w") as f:
+                json.dump(production, f, indent=2)
+            log.info("Written %s (%d matches)", out_path, production["num_matches"])
+            all_results[category] = {"file": str(out_path), "matches": production["num_matches"]}
+
+        except Exception as e:
+            log.error("Failed to process %s: %s", catalog_file.name, e)
+            import traceback
+            traceback.print_exc()
+
+    # Write summary
+    with open("all_match_results.json", "w") as f:
+        json.dump(all_results, f, indent=2)
+    log.info("All results summary written to all_match_results.json")
 
     total_elapsed = time.time() - total_start
     log.info("Total runtime: %.1fs (%.1f min)", total_elapsed, total_elapsed / 60)
