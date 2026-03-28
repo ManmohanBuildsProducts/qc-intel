@@ -34,73 +34,29 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def _scrape_pincode(
+async def _scrape_single(
     orch: PipelineOrchestrator,
-    category: str,
+    platform: Platform,
     pincode: str,
-    platforms: list[Platform],
+    category: str,
     time_of_day: TimeOfDay,
-    parallel_platforms: bool,
     semaphore: asyncio.Semaphore,
 ) -> tuple[int, int]:
-    """Scrape one (category, pincode) combo. Returns (products, errors).
+    """Scrape one (platform, category, pincode) combo. Returns (products, errors).
 
-    When parallel_platforms=True, Blinkit runs first (needs Firefox exclusively),
-    then Zepto + Instamart run concurrently (Firefox + Chromium, no conflict).
+    Each call gets its own browser instance (--isolated), so any combination
+    of platforms can run concurrently without profile lock conflicts.
     """
     async with semaphore:
-        products = 0
-        errors = 0
-        if parallel_platforms:
-            label = f"{category}/{pincode}"
-
-            # Phase 1: Blinkit first (Firefox-only, can't share)
-            blinkit_platforms = [p for p in platforms if p == Platform.BLINKIT]
-            other_platforms = [p for p in platforms if p != Platform.BLINKIT]
-
-            for platform in blinkit_platforms:
-                plabel = f"{platform.value}/{label}"
-                logger.info("Starting %s (sequential — Firefox lock)", plabel)
-                try:
-                    run = await orch.run_scrape(platform, pincode, category, time_of_day)
-                    products += run.products_found
-                    logger.info("Done %s — %d products", plabel, run.products_found)
-                except Exception as e:
-                    errors += 1
-                    logger.error("FAILED %s — %s", plabel, e)
-
-            # Phase 2: Zepto + Instamart in parallel (Firefox + Chromium)
-            if other_platforms:
-                logger.info("Starting %s × %d platforms (parallel)", label, len(other_platforms))
-
-                async def _scrape(platform: Platform) -> object:
-                    return await orch.run_scrape(platform, pincode, category, time_of_day)
-
-                results = await asyncio.gather(
-                    *[_scrape(p) for p in other_platforms], return_exceptions=True,
-                )
-                for platform, result in zip(other_platforms, results):
-                    if isinstance(result, Exception):
-                        errors += 1
-                        logger.error("FAILED %s/%s — %s", platform.value, label, result)
-                    else:
-                        products += result.products_found
-                        logger.info(
-                            "Done %s/%s — %d products",
-                            platform.value, label, result.products_found,
-                        )
-        else:
-            for platform in platforms:
-                plabel = f"{platform.value}/{category}/{pincode}"
-                logger.info("Starting %s", plabel)
-                try:
-                    run = await orch.run_scrape(platform, pincode, category, time_of_day)
-                    products += run.products_found
-                    logger.info("Done %s — %d products, %d errors", plabel, run.products_found, run.errors)
-                except Exception as e:
-                    errors += 1
-                    logger.error("FAILED %s — %s", plabel, e)
-        return products, errors
+        label = f"{platform.value}/{category}/{pincode}"
+        logger.info("Starting %s", label)
+        try:
+            run = await orch.run_scrape(platform, pincode, category, time_of_day)
+            logger.info("Done %s — %d products", label, run.products_found)
+            return run.products_found, 0
+        except Exception as e:
+            logger.error("FAILED %s — %s", label, e)
+            return 0, 1
 
 
 async def run_batch(
@@ -113,28 +69,28 @@ async def run_batch(
 ) -> dict:
     """Run scrape for all combinations, returning a summary.
 
-    Args:
-        parallel_platforms: Scrape all 3 platforms concurrently per (category, pincode).
-        concurrency: Number of pincodes to process concurrently (default 1 = sequential).
+    All (platform, category, pincode) combos are flattened into individual tasks
+    and throttled by the semaphore. With --isolated browsers, any platform combo
+    can run concurrently. concurrency controls total parallel browser instances.
     """
     orch = PipelineOrchestrator()
     total = len(categories) * len(pincodes) * len(platforms)
     semaphore = asyncio.Semaphore(concurrency)
 
     logger.info(
-        "Concurrency: %d pincodes, parallel_platforms=%s",
-        concurrency, parallel_platforms,
+        "Concurrency: %d parallel browsers, %d total jobs",
+        concurrency, total,
     )
 
     tasks = []
     for category in categories:
         for pincode in pincodes:
-            tasks.append(
-                _scrape_pincode(
-                    orch, category, pincode, platforms, time_of_day,
-                    parallel_platforms, semaphore,
+            for platform in platforms:
+                tasks.append(
+                    _scrape_single(
+                        orch, platform, pincode, category, time_of_day, semaphore,
+                    )
                 )
-            )
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -142,8 +98,8 @@ async def run_batch(
     total_errors = 0
     for result in results:
         if isinstance(result, Exception):
-            total_errors += len(platforms)
-            logger.error("Pincode batch failed: %s", result)
+            total_errors += 1
+            logger.error("Job failed: %s", result)
         else:
             products, errors = result
             total_products += products
