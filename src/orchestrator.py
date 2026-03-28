@@ -11,6 +11,8 @@ from src.agents.scraper.sales_service import SalesService
 from src.agents.scraper.service import ScrapeService
 from src.config.settings import settings
 from src.db.init_db import init_db
+from src.embeddings.catalog_export import export_catalog_to_json
+from src.embeddings.kaggle_client import KaggleEmbeddingClient
 from src.models.product import (
     MarketReport,
     NormalizationResult,
@@ -42,10 +44,22 @@ class PipelineOrchestrator:
         service = SalesService(self.conn)
         return service.calculate_daily_sales(date, pincode)
 
-    async def run_normalization(self, category: str) -> NormalizationResult:
+    def run_embedding(self, category: str) -> dict | None:
+        """Run Kaggle embedding pipeline: export catalog → push → poll → download."""
+        from pathlib import Path
+
+        cache_dir = settings.embedding_cache_dir
+        Path(cache_dir).mkdir(parents=True, exist_ok=True)
+        export_path = str(Path(cache_dir) / "catalog_export.json")
+
+        export_catalog_to_json(self.conn, export_path, category=category)
+        client = KaggleEmbeddingClient()
+        return client.run_embedding_pipeline(export_path, category)
+
+    async def run_normalization(self, category: str, match_results: dict | None = None) -> NormalizationResult:
         """Normalize products across platforms for a category."""
         service = NormalizerService(self.conn)
-        return service.normalize_category(category)
+        return service.normalize_category(category, match_results=match_results)
 
     async def run_analysis(self, brand: str, category: str) -> MarketReport:
         """Generate a market intelligence report."""

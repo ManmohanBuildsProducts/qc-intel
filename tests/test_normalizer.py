@@ -1,6 +1,8 @@
 """Tests for normalizer — embedder + normalization service."""
 
+import json
 import sqlite3
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -10,41 +12,10 @@ from src.agents.scraper.service import ScrapeService
 from src.embeddings.product_embedder import ProductEmbedder
 from src.models.product import CatalogProduct, Platform, TimeOfDay
 
+FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
 
 class TestProductEmbedder:
-    def test_embed_returns_array(self) -> None:
-        embedder = ProductEmbedder()
-        result = embedder.embed(["Amul Taaza Toned Milk 500ml"])
-        assert result.shape[0] == 1
-        assert result.shape[1] > 0
-
-    def test_similar_products_high_similarity(self) -> None:
-        embedder = ProductEmbedder()
-        sim = embedder.similarity_matrix(
-            ["Amul Taaza Toned Fresh Milk 500ml"],
-            ["Amul Taaza Toned Milk 500 ml"],
-        )
-        assert sim[0][0] > 0.85
-
-    def test_dissimilar_products_low_similarity(self) -> None:
-        embedder = ProductEmbedder()
-        sim = embedder.similarity_matrix(
-            ["Amul Taaza Toned Fresh Milk 500ml"],
-            ["Harvest Gold White Bread 1 pack"],
-        )
-        assert sim[0][0] < 0.5
-
-    def test_find_matches(self) -> None:
-        embedder = ProductEmbedder()
-        matches = embedder.find_matches(
-            ["Amul Taaza Toned Milk 500ml"],
-            ["Amul Taaza Fresh Milk 500ml", "Britannia Bread 400g"],
-            threshold=0.8,
-        )
-        assert len(matches) >= 1
-        assert matches[0][0] == 0  # query_idx
-        assert matches[0][1] == 0  # corpus_idx (milk match)
-
     def test_compose_product_text(self) -> None:
         text = ProductEmbedder.compose_product_text("Taaza Milk", "Amul", "500ml")
         assert text == "Amul Taaza Milk 500ml"
@@ -52,6 +23,54 @@ class TestProductEmbedder:
     def test_compose_product_text_no_brand(self) -> None:
         text = ProductEmbedder.compose_product_text("Taaza Milk", unit="500ml")
         assert text == "Taaza Milk 500ml"
+
+    def test_compose_product_text_no_unit(self) -> None:
+        text = ProductEmbedder.compose_product_text("Taaza Milk", "Amul")
+        assert text == "Amul Taaza Milk"
+
+    def test_compose_product_text_normalizes_unit(self) -> None:
+        text = ProductEmbedder.compose_product_text("Taaza Milk", "Amul", "500 ml")
+        assert text == "Amul Taaza Milk 500ml"
+
+    def test_load_match_results(self, tmp_path: Path) -> None:
+        data = {
+            "model": "BAAI/bge-m3",
+            "reranker": "BAAI/bge-reranker-v2-m3",
+            "matches": [
+                {"query_id": 1, "corpus_id": 2, "rerank_score": 0.95},
+            ],
+        }
+        path = tmp_path / "match_results.json"
+        path.write_text(json.dumps(data))
+
+        embedder = ProductEmbedder(cache_dir=str(tmp_path))
+        result = embedder.load_match_results(path)
+        assert len(result["matches"]) == 1
+
+    def test_find_matches_from_results(self) -> None:
+        results = {
+            "matches": [
+                {"query_id": 1, "corpus_id": 10, "rerank_score": 0.95},
+                {"query_id": 2, "corpus_id": 10, "rerank_score": 0.70},  # Below threshold
+                {"query_id": 3, "corpus_id": 11, "rerank_score": 0.85},
+            ],
+        }
+        embedder = ProductEmbedder()
+        matches = embedder.find_matches_from_results(results, threshold=0.80)
+        assert len(matches) == 2
+        assert (1, 10, 0.95) in matches
+        assert (3, 11, 0.85) in matches
+
+    def test_find_matches_uses_score_fallback(self) -> None:
+        """Benchmark results use 'score' instead of 'rerank_score'."""
+        results = {
+            "matches": [
+                {"query_id": 1, "corpus_id": 10, "score": 0.90},
+            ],
+        }
+        embedder = ProductEmbedder()
+        matches = embedder.find_matches_from_results(results, threshold=0.80)
+        assert len(matches) == 1
 
 
 class TestNormalizerService:
@@ -68,7 +87,46 @@ class TestNormalizerService:
         service.process_scrape_results(zepto_data, Platform.ZEPTO, "122001", "Dairy & Bread", TimeOfDay.MORNING)
         service.process_scrape_results(instamart_data, Platform.INSTAMART, "122001", "Dairy & Bread", TimeOfDay.MORNING)
 
-    def test_normalize_category(
+    def _build_match_results(self, db_session: sqlite3.Connection) -> dict:
+        """Build mock match results from fixture data using IDs from DB."""
+        # Get product IDs by platform
+        rows = db_session.execute(
+            "SELECT id, platform, name FROM product_catalog ORDER BY id"
+        ).fetchall()
+        blinkit = [r for r in rows if r[1] == "blinkit"]
+        zepto = [r for r in rows if r[1] == "zepto"]
+        instamart = [r for r in rows if r[1] == "instamart"]
+
+        # Create matches: each zepto/instamart product maps to same-index blinkit product
+        matches = []
+        for i, zp in enumerate(zepto):
+            if i < len(blinkit):
+                matches.append({
+                    "query_id": zp[0],
+                    "corpus_id": blinkit[i][0],
+                    "rerank_score": 0.95,
+                    "query_text": zp[2],
+                    "corpus_text": blinkit[i][2],
+                })
+        for i, im in enumerate(instamart):
+            if i < len(blinkit):
+                matches.append({
+                    "query_id": im[0],
+                    "corpus_id": blinkit[i][0],
+                    "rerank_score": 0.90,
+                    "query_text": im[2],
+                    "corpus_text": blinkit[i][2],
+                })
+
+        return {
+            "model": "BAAI/bge-m3",
+            "reranker": "BAAI/bge-reranker-v2-m3",
+            "category": "Dairy & Bread",
+            "anchor_platform": "blinkit",
+            "matches": matches,
+        }
+
+    def test_normalize_category_with_match_results(
         self,
         db_session: sqlite3.Connection,
         blinkit_fixture_data: list[dict],
@@ -76,13 +134,13 @@ class TestNormalizerService:
         instamart_fixture_data: list[dict],
     ) -> None:
         self._seed_all_platforms(db_session, blinkit_fixture_data, zepto_fixture_data, instamart_fixture_data)
+        match_results = self._build_match_results(db_session)
 
         normalizer = NormalizerService(db_session)
-        result = normalizer.normalize_category("Dairy & Bread")
+        result = normalizer.normalize_category("Dairy & Bread", match_results=match_results)
 
         assert result.canonical_products_created > 0
         assert result.mappings_created > 0
-        # Should have mappings for all 30 products (10 per platform)
         assert result.mappings_created >= 20  # At least anchor + some matches
 
     def test_normalize_empty_category(self, db_session: sqlite3.Connection) -> None:
@@ -99,15 +157,14 @@ class TestNormalizerService:
         instamart_fixture_data: list[dict],
     ) -> None:
         self._seed_all_platforms(db_session, blinkit_fixture_data, zepto_fixture_data, instamart_fixture_data)
+        match_results = self._build_match_results(db_session)
 
         normalizer = NormalizerService(db_session)
-        normalizer.normalize_category("Dairy & Bread")
+        normalizer.normalize_category("Dairy & Bread", match_results=match_results)
 
-        # Verify canonical products exist
         count = db_session.execute("SELECT COUNT(*) FROM canonical_products").fetchone()[0]
         assert count > 0
 
-        # Verify mappings exist
         mapping_count = db_session.execute("SELECT COUNT(*) FROM product_mappings").fetchone()[0]
         assert mapping_count > 0
 
@@ -119,17 +176,40 @@ class TestNormalizerService:
         instamart_fixture_data: list[dict],
     ) -> None:
         self._seed_all_platforms(db_session, blinkit_fixture_data, zepto_fixture_data, instamart_fixture_data)
+        match_results = self._build_match_results(db_session)
 
         normalizer = NormalizerService(db_session)
-        normalizer.normalize_category("Dairy & Bread")
+        normalizer.normalize_category("Dairy & Bread", match_results=match_results)
 
         from src.db.repository import CanonicalRepository
 
         view = CanonicalRepository(db_session).get_cross_platform_view()
         assert len(view) > 0
-        # At least some products should have multiple platform mappings
         multi_platform = [v for v in view if len(v["platforms"]) > 1]
         assert len(multi_platform) > 0
+
+    def test_normalize_without_match_results_creates_all_canonicals(
+        self,
+        db_session: sqlite3.Connection,
+        blinkit_fixture_data: list[dict],
+        zepto_fixture_data: list[dict],
+        instamart_fixture_data: list[dict],
+    ) -> None:
+        """Without match results, every product becomes its own canonical."""
+        self._seed_all_platforms(db_session, blinkit_fixture_data, zepto_fixture_data, instamart_fixture_data)
+
+        # Mock kaggle_client to return None
+        normalizer = NormalizerService(db_session)
+        normalizer.kaggle_client = MagicMock()
+        normalizer.kaggle_client.load_match_results.return_value = None
+
+        result = normalizer.normalize_category("Dairy & Bread")
+
+        # All 30 products should have mappings (each as its own canonical)
+        total_products = db_session.execute(
+            "SELECT COUNT(*) FROM product_catalog WHERE category = 'Dairy & Bread'"
+        ).fetchone()[0]
+        assert result.mappings_created == total_products
 
 
 class TestLLMValidation:

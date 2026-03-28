@@ -1,53 +1,50 @@
-"""Product name embeddings using sentence-transformers."""
+"""Product matching via pre-computed Kaggle embeddings + reranker scores."""
 
+import json
 import logging
-
-import numpy as np
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
+from pathlib import Path
 
 from src.config.settings import settings
+from src.embeddings.unit_normalizer import normalize_unit
 
 logger = logging.getLogger(__name__)
 
 
 class ProductEmbedder:
-    """Wrapper around sentence-transformers for product similarity."""
+    """Loads pre-computed match results from Kaggle embedding pipeline."""
 
-    def __init__(self, model_name: str | None = None) -> None:
-        self.model_name = model_name or settings.embedding_model
-        self._model: SentenceTransformer | None = None
+    def __init__(self, cache_dir: str | None = None) -> None:
+        self.cache_dir = cache_dir or settings.embedding_cache_dir
 
-    @property
-    def model(self) -> SentenceTransformer:
-        if self._model is None:
-            self._model = SentenceTransformer(self.model_name)
-        return self._model
+    def load_match_results(self, path: str | Path) -> dict:
+        """Load match results JSON from Kaggle output."""
+        data = json.loads(Path(path).read_text())
+        logger.info(
+            "Loaded %d matches from %s (model=%s, reranker=%s)",
+            len(data.get("matches", [])),
+            path,
+            data.get("model", "unknown"),
+            data.get("reranker", "unknown"),
+        )
+        return data
 
-    def embed(self, texts: list[str]) -> np.ndarray:
-        """Generate embeddings for a list of texts."""
-        return self.model.encode(texts, convert_to_numpy=True)
-
-    def similarity_matrix(self, texts_a: list[str], texts_b: list[str]) -> np.ndarray:
-        """Compute cosine similarity matrix between two sets of texts."""
-        emb_a = self.embed(texts_a)
-        emb_b = self.embed(texts_b)
-        return cosine_similarity(emb_a, emb_b)
-
-    def find_matches(
+    def find_matches_from_results(
         self,
-        query_texts: list[str],
-        corpus_texts: list[str],
+        match_results: dict,
         threshold: float | None = None,
     ) -> list[tuple[int, int, float]]:
-        """Find matches above threshold. Returns (query_idx, corpus_idx, similarity)."""
+        """Extract matches above threshold from pre-computed results.
+
+        Returns (query_id, corpus_id, rerank_score) tuples.
+        query_id = non-anchor product catalog ID
+        corpus_id = anchor product catalog ID
+        """
         threshold = threshold or settings.embedding_similarity_threshold
-        sim_matrix = self.similarity_matrix(query_texts, corpus_texts)
         matches = []
-        for i in range(len(query_texts)):
-            for j in range(len(corpus_texts)):
-                if sim_matrix[i][j] >= threshold:
-                    matches.append((i, j, float(sim_matrix[i][j])))
+        for m in match_results.get("matches", []):
+            score = m.get("rerank_score", m.get("score", 0.0))
+            if score >= threshold:
+                matches.append((m["query_id"], m["corpus_id"], score))
         return matches
 
     @staticmethod
@@ -58,5 +55,6 @@ class ProductEmbedder:
             parts.append(brand)
         parts.append(name)
         if unit:
-            parts.append(unit)
+            norm = normalize_unit(unit)
+            parts.append(norm if norm else unit)
         return " ".join(parts)

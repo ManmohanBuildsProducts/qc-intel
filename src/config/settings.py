@@ -109,10 +109,16 @@ class Settings(BaseSettings):
     scrape_timeout: int = 30
     scrape_max_agent_turns: int = 15
 
-    # Embeddings
-    embedding_model: str = "all-MiniLM-L6-v2"
+    # Embeddings (Kaggle-hosted models)
+    embedding_model: str = "BAAI/bge-m3"
+    reranker_model: str = "BAAI/bge-reranker-v2-m3"
     embedding_similarity_threshold: float = 0.85
     embedding_batch_size: int = 64
+    embedding_cache_dir: str = "data/embeddings"
+
+    # Kaggle
+    kaggle_username: str = Field("", validation_alias="KAGGLE_USERNAME")
+    kaggle_kernel_slug: str = "qc-intel-embeddings"
 
     # Gemini API key — reads GOOGLE_API_KEY from .env (no QC_ prefix)
     google_api_key: str = Field("", validation_alias="GOOGLE_API_KEY")

@@ -25,6 +25,7 @@ def build_parser() -> argparse.ArgumentParser:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--scrape", action="store_true", help="Run scraper agents")
     mode.add_argument("--calculate-sales", action="store_true", help="Calculate daily sales")
+    mode.add_argument("--embed", action="store_true", help="Run Kaggle embedding pipeline (export → push → poll → download)")
     mode.add_argument("--normalize", action="store_true", help="Normalize products cross-platform")
     mode.add_argument("--normalize-all", action="store_true", help="Normalize all default categories")
     mode.add_argument("--analyze", action="store_true", help="Generate market intelligence report")
@@ -64,6 +65,15 @@ async def async_main(args: argparse.Namespace) -> None:
             args.date = datetime.now().strftime("%Y-%m-%d")
         result = orch.run_sales_calculation(args.date)
         logger.info("Sales calculated: %s", result)
+
+    elif args.embed:
+        logger.info("Running Kaggle embedding pipeline for %s...", args.category)
+        result = orch.run_embedding(args.category)
+        if result:
+            logger.info("Embedding complete: %d matches", result.get("num_matches", 0))
+        else:
+            logger.error("Embedding pipeline failed")
+            sys.exit(1)
 
     elif args.normalize:
         result = await orch.run_normalization(args.category)

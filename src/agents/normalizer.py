@@ -1,4 +1,4 @@
-"""Normalizer agent — cross-platform product matching via embeddings + Gemini validation."""
+"""Normalizer agent — cross-platform product matching via Kaggle embeddings + reranker."""
 
 import logging
 import sqlite3
@@ -8,6 +8,7 @@ from google.genai import types as genai_types
 
 from src.config.settings import settings
 from src.db.repository import CanonicalRepository
+from src.embeddings.kaggle_client import KaggleEmbeddingClient
 from src.embeddings.product_embedder import ProductEmbedder
 from src.embeddings.unit_normalizer import normalize_unit
 from src.models.product import (
@@ -20,21 +21,32 @@ from src.models.product import (
 
 logger = logging.getLogger(__name__)
 
-# Thresholds
+# Thresholds (calibrated for bge-reranker-v2-m3 scores)
 HIGH_CONFIDENCE_THRESHOLD = 0.85
 AMBIGUOUS_LOWER_THRESHOLD = 0.80
 
 
 class NormalizerService:
-    """Cross-platform product normalization using embeddings and optional Claude validation."""
+    """Cross-platform product normalization using pre-computed Kaggle embeddings."""
 
     def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
         self.canonical_repo = CanonicalRepository(conn)
         self.embedder = ProductEmbedder()
+        self.kaggle_client = KaggleEmbeddingClient()
 
-    def normalize_category(self, category: str) -> NormalizationResult:
-        """Match products across platforms for a category. Blinkit = anchor platform."""
+    def normalize_category(
+        self,
+        category: str,
+        match_results: dict | None = None,
+    ) -> NormalizationResult:
+        """Match products across platforms for a category. Blinkit = anchor platform.
+
+        Args:
+            category: Product category to normalize.
+            match_results: Pre-computed match results from Kaggle. If None,
+                          attempts to load from cache.
+        """
         # Get unmapped products
         all_unmapped = self.canonical_repo.get_unmapped()
         category_products = [p for p in all_unmapped if p.category == category]
@@ -55,19 +67,13 @@ class NormalizerService:
         anchor_products = by_platform.pop(Platform.BLINKIT, [])
 
         if not anchor_products:
-            # If no Blinkit products, use first available platform as anchor
             first_platform = next(iter(by_platform))
             anchor_products = by_platform.pop(first_platform)
 
         # Create canonical products for all anchor products
         canonical_created = 0
         mappings_created = 0
-        anchor_canonical_ids: list[int] = []
-
-        anchor_texts = [
-            self.embedder.compose_product_text(p.name, p.brand, normalize_unit(p.unit))
-            for p in anchor_products
-        ]
+        anchor_canonical_ids: dict[int, int] = {}  # catalog_id -> canonical_id
 
         for anchor in anchor_products:
             canonical = CanonicalProduct(
@@ -77,61 +83,86 @@ class NormalizerService:
                 unit_normalized=normalize_unit(anchor.unit),
             )
             cid = self.canonical_repo.insert_canonical(canonical)
-            anchor_canonical_ids.append(cid)
+            anchor_canonical_ids[anchor.id] = cid
             self.canonical_repo.insert_mapping(
                 ProductMapping(catalog_id=anchor.id, canonical_id=cid, similarity_score=1.0)
             )
             canonical_created += 1
             mappings_created += 1
 
-        # Match other platform products to anchor canonical products
-        unmapped_count = 0
-        for platform, products in by_platform.items():
-            product_texts = [
-                self.embedder.compose_product_text(p.name, p.brand, normalize_unit(p.unit))
-                for p in products
-            ]
+        # Load match results (pre-computed by Kaggle)
+        if match_results is None:
+            match_results = self.kaggle_client.load_match_results(category)
 
-            matches = self.embedder.find_matches(
-                product_texts, anchor_texts, threshold=AMBIGUOUS_LOWER_THRESHOLD
+        if match_results is None:
+            # No match results available — all non-anchor products become new canonicals
+            logger.warning("No match results for %s — creating new canonicals for all", category)
+            for platform, products in by_platform.items():
+                for product in products:
+                    canonical = CanonicalProduct(
+                        canonical_name=product.name,
+                        brand=product.brand,
+                        category=category,
+                        unit_normalized=normalize_unit(product.unit),
+                    )
+                    cid = self.canonical_repo.insert_canonical(canonical)
+                    self.canonical_repo.insert_mapping(
+                        ProductMapping(catalog_id=product.id, canonical_id=cid, similarity_score=1.0)
+                    )
+                    canonical_created += 1
+                    mappings_created += 1
+            return NormalizationResult(
+                canonical_products_created=canonical_created,
+                mappings_created=mappings_created,
+                unmapped_count=sum(len(p) for p in by_platform.values()),
             )
 
-            # Build best match per product
-            best_matches: dict[int, tuple[int, float]] = {}
-            for query_idx, corpus_idx, sim in matches:
-                if query_idx not in best_matches or sim > best_matches[query_idx][1]:
-                    best_matches[query_idx] = (corpus_idx, sim)
+        # Build match lookup: query_id (non-anchor) -> best (anchor_id, score)
+        matches = self.embedder.find_matches_from_results(
+            match_results, threshold=AMBIGUOUS_LOWER_THRESHOLD
+        )
 
-            for prod_idx, product in enumerate(products):
-                if prod_idx in best_matches:
-                    anchor_idx, sim = best_matches[prod_idx]
+        best_matches: dict[int, tuple[int, float]] = {}
+        for query_id, corpus_id, score in matches:
+            if query_id not in best_matches or score > best_matches[query_id][1]:
+                best_matches[query_id] = (corpus_id, score)
 
-                    # Unit mismatch guard: reject if both units are parseable but differ.
-                    # Catches same-name-different-size merges (e.g. 500ml vs 1L).
-                    anchor_unit = normalize_unit(anchor_products[anchor_idx].unit)
-                    product_unit = normalize_unit(product.unit)
-                    if anchor_unit and product_unit and anchor_unit != product_unit:
-                        logger.debug(
-                            "Unit mismatch — rejecting merge: %s (%s) vs %s (%s)",
-                            anchor_products[anchor_idx].name, anchor_unit,
-                            product.name, product_unit,
-                        )
-                        # Fall through to create a new canonical below
-                        best_matches.pop(prod_idx)
+        # Build anchor lookup for unit checks
+        anchor_by_id: dict[int, CatalogProduct] = {a.id: a for a in anchor_products}
 
-                if prod_idx in best_matches:
-                    anchor_idx, sim = best_matches[prod_idx]
-                    canonical_id = anchor_canonical_ids[anchor_idx]
-                    self.canonical_repo.insert_mapping(
-                        ProductMapping(
-                            catalog_id=product.id,
-                            canonical_id=canonical_id,
-                            similarity_score=round(sim, 4),
-                        )
-                    )
-                    mappings_created += 1
-                else:
-                    # No match — create new canonical product
+        # Match other platform products
+        unmapped_count = 0
+        for platform, products in by_platform.items():
+            for product in products:
+                matched = False
+
+                if product.id in best_matches:
+                    anchor_id, sim = best_matches[product.id]
+
+                    # Unit mismatch guard
+                    anchor = anchor_by_id.get(anchor_id)
+                    if anchor:
+                        anchor_unit = normalize_unit(anchor.unit)
+                        product_unit = normalize_unit(product.unit)
+                        if anchor_unit and product_unit and anchor_unit != product_unit:
+                            logger.debug(
+                                "Unit mismatch — rejecting merge: %s (%s) vs %s (%s)",
+                                anchor.name, anchor_unit, product.name, product_unit,
+                            )
+                        else:
+                            canonical_id = anchor_canonical_ids.get(anchor_id)
+                            if canonical_id:
+                                self.canonical_repo.insert_mapping(
+                                    ProductMapping(
+                                        catalog_id=product.id,
+                                        canonical_id=canonical_id,
+                                        similarity_score=round(sim, 4),
+                                    )
+                                )
+                                mappings_created += 1
+                                matched = True
+
+                if not matched:
                     canonical = CanonicalProduct(
                         canonical_name=product.name,
                         brand=product.brand,
