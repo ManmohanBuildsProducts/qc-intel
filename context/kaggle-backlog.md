@@ -1,7 +1,8 @@
-# Kaggle GPU Backlog
+# Kaggle GPU & Pipeline Backlog
 
-Tasks to offload to Kaggle free GPU (30hrs/week T4/P100). Ordered by impact.
+Tasks to offload to Kaggle free GPU (30hrs/week T4/P100) and pipeline improvements. Ordered by impact.
 Credentials: `.env` (KAGGLE_USERNAME, KAGGLE_KEY).
+Compute runs on laptop (no Oracle VM). Kaggle for ML only.
 
 ---
 
@@ -47,6 +48,33 @@ Credentials: `.env` (KAGGLE_USERNAME, KAGGLE_KEY).
 **Quota:** ~15 min/run
 
 > Add visual product matching as a 3rd signal alongside text embeddings + reranker. Scrape product thumbnail images, embed with CLIP-ViT-B/32 on Kaggle GPU, compute visual similarity matrix. Fuse with text similarity (weighted: 0.7 text + 0.3 visual). Particularly useful for products with identical names but different packaging/variants.
+
+---
+
+## 6. Fix Zepto Scraper Dedup
+
+**Priority:** High | **When:** Before next scrape
+**Quota:** N/A (local fix)
+
+> Zepto scraper produces duplicate products (same product appears twice with identical data). This causes oversized clusters in normalization (>3 mappings per canonical). Fix the scraper dedup logic in `src/agents/scraper/` to deduplicate before persisting to DB. Check `platform_product_id` uniqueness.
+
+---
+
+## 7. LLM Judge Cleanup on Flagged Pairs
+
+**Priority:** Medium | **When:** After normalization stabilizes
+**Quota:** ~10 min/run
+
+> Run `python eval/eval_normalization.py --llm-judge --fix` to have Gemini validate the 78 flagged pairs (34 oversized clusters, 44 low Jaccard). Delete confirmed bad matches. This cleans up the remaining 1.5% noise.
+
+---
+
+## 8. Incremental Normalization After Scrapes
+
+**Priority:** Medium | **When:** After scraping pipeline is stable
+**Quota:** ~5 min per incremental run
+
+> Currently `--normalize` requires pre-cached Kaggle results. Add auto-detection of new unmapped products after scrapes. If unmapped count > threshold, auto-trigger Kaggle embedding run + normalize. Run locally on laptop via cron or manual trigger.
 
 ---
 
