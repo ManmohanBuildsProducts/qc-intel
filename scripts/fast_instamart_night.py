@@ -95,14 +95,14 @@ async def scrape_instamart_all_categories(
                     for term in terms:
                         url = f"https://www.swiggy.com/instamart/search?custom_back=true&query={term}"
                         await session.call_tool("browser_navigate", {"url": url})
-                        await session.call_tool("browser_wait_for", {"time": 2000})
+                        await session.call_tool("browser_wait_for", {"time": 1200})
 
                         # Progressive scroll to trigger lazy loading
                         for scroll_y in (500, 1500, 3000):
                             await session.call_tool("browser_evaluate", {
                                 "function": f'() => {{ window.scrollTo(0, {scroll_y}); return "ok"; }}',
                             })
-                            await session.call_tool("browser_wait_for", {"time": 1500})
+                            await session.call_tool("browser_wait_for", {"time": 800})
 
                         # Extract from snapshot
                         snapshot = _result_text(
@@ -113,11 +113,11 @@ async def scrape_instamart_all_categories(
                         # Retry once if empty
                         if not items:
                             logger.info("[instamart/%s] Retrying '%s'...", pincode, term)
-                            await session.call_tool("browser_wait_for", {"time": 3000})
+                            await session.call_tool("browser_wait_for", {"time": 1500})
                             await session.call_tool("browser_evaluate", {
                                 "function": '() => { window.scrollTo(0, document.body.scrollHeight); return "ok"; }',
                             })
-                            await session.call_tool("browser_wait_for", {"time": 2000})
+                            await session.call_tool("browser_wait_for", {"time": 1200})
                             snapshot = _result_text(
                                 await session.call_tool("browser_snapshot", {})
                             )
@@ -183,8 +183,8 @@ async def main():
         logger.info("Nothing to do — all Instamart night runs complete!")
         return
 
-    # Run 2 pincodes concurrently (2 Chromium browsers)
-    semaphore = asyncio.Semaphore(2)
+    # Run 4 pincodes concurrently (4 Chromium browsers)
+    semaphore = asyncio.Semaphore(4)
     total_stats = {"products": 0, "errors": 0}
 
     async def run_pincode(pincode: str):
