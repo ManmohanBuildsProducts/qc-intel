@@ -1,5 +1,5 @@
 {
-  "id": "manmohanbuilds/qc-intel-embeddings",
+  "id": "manmohanbuilds/qc-intel-product-embedding-benchmark",
   "title": "QC Intel — Product Embedding Benchmark",
   "code_file": "embed_and_rerank.py",
   "language": "python",
@@ -7,7 +7,7 @@
   "is_private": true,
   "enable_gpu": true,
   "enable_internet": true,
-  "dataset_sources": [],
+  "dataset_sources": ["manmohanbuilds/qc-intel-catalog"],
   "competition_sources": [],
   "kernel_sources": []
 }

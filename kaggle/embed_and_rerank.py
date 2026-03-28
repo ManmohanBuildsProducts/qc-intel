@@ -29,9 +29,12 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-INPUT_DIR = Path("input")
+# On Kaggle, datasets mount at /kaggle/input/<dataset-slug>/
+INPUT_DIR = Path("/kaggle/input/qc-intel-catalog")
+if not INPUT_DIR.exists():
+    INPUT_DIR = Path("input")  # Local fallback
 CATALOG_PATH = INPUT_DIR / "catalog.json"
-FIXTURES_DIR = INPUT_DIR / "fixtures"
+FIXTURES_PATH = INPUT_DIR / "fixtures_catalog.json"  # Fixtures in same dataset
 BENCHMARK_OUT = Path("benchmark_results.json")
 MATCH_OUT = Path("match_results.json")
 
@@ -515,10 +518,11 @@ def main() -> None:
 
     total_start = time.time()
 
-    # Benchmark mode — runs if fixtures directory exists
-    if FIXTURES_DIR.exists() and any(FIXTURES_DIR.iterdir()):
-        log.info("Fixtures directory found — running benchmark mode")
-        benchmark = run_benchmark(catalog)
+    # Benchmark mode — runs if fixtures file exists
+    if FIXTURES_PATH.exists():
+        log.info("Fixtures found at %s — running benchmark mode", FIXTURES_PATH)
+        fixture_catalog = load_catalog(FIXTURES_PATH)
+        benchmark = run_benchmark(fixture_catalog)
         with open(BENCHMARK_OUT, "w") as f:
             json.dump(benchmark, f, indent=2)
         log.info("Benchmark results written to %s", BENCHMARK_OUT)
@@ -533,7 +537,7 @@ def main() -> None:
             else:
                 log.info("%-45s %8d %8.1f", c["name"], c["num_scores"], c["elapsed_seconds"])
     else:
-        log.info("No fixtures directory — skipping benchmark mode")
+        log.info("No fixtures file found — skipping benchmark mode")
 
     # Production mode — always runs
     try:

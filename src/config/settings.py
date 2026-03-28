@@ -118,7 +118,7 @@ class Settings(BaseSettings):
 
     # Kaggle
     kaggle_username: str = Field("", validation_alias="KAGGLE_USERNAME")
-    kaggle_kernel_slug: str = "qc-intel-embeddings"
+    kaggle_kernel_slug: str = "qc-intel-product-embedding-benchmark"
 
     # Gemini API key — reads GOOGLE_API_KEY from .env (no QC_ prefix)
     google_api_key: str = Field("", validation_alias="GOOGLE_API_KEY")
