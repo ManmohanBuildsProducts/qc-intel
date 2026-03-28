@@ -102,7 +102,7 @@ async def scrape_instamart_all_categories(
                             await session.call_tool("browser_evaluate", {
                                 "function": f'() => {{ window.scrollTo(0, {scroll_y}); return "ok"; }}',
                             })
-                            await session.call_tool("browser_wait_for", {"time": 800})
+                            await session.call_tool("browser_wait_for", {"time": 1000})
 
                         # Extract from snapshot
                         snapshot = _result_text(
@@ -183,8 +183,8 @@ async def main():
         logger.info("Nothing to do — all Instamart night runs complete!")
         return
 
-    # Run 4 pincodes concurrently (4 Chromium browsers)
-    semaphore = asyncio.Semaphore(4)
+    # Run 3 pincodes concurrently (3 Chromium browsers — 4 triggers Swiggy WAF)
+    semaphore = asyncio.Semaphore(3)
     total_stats = {"products": 0, "errors": 0}
 
     async def run_pincode(pincode: str):
