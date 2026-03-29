@@ -7,7 +7,7 @@
 - **Tests:** 236/236 passing
 - **Lint:** ruff clean on all files (0 errors)
 - **Branch:** main
-- **Normalization:** 5,913/5,913 products mapped across 9 categories, 5,294 canonicals, 1.5% flagged
+- **Normalization:** 5,822/6,332 products mapped across 9 categories, 5,294 canonicals (91 bad mappings cleaned by LLM judge on 2026-03-29)
 
 ## Session History
 

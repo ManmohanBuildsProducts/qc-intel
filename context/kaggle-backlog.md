@@ -78,12 +78,9 @@ Compute runs on laptop (no Oracle VM). Kaggle for ML only.
 
 ---
 
-## 7. LLM Judge Cleanup on Flagged Pairs
+## 7. ~~LLM Judge Cleanup on Flagged Pairs~~ DONE (2026-03-29)
 
-**Priority:** Medium | **When:** After normalization stabilizes
-**Quota:** ~10 min/run
-
-> Run `python eval/eval_normalization.py --llm-judge --fix` to have Gemini validate the 78 flagged pairs (34 oversized clusters, 44 low Jaccard). Delete confirmed bad matches. This cleans up the remaining 1.5% noise.
+> Ran `python eval/eval_normalization.py --llm-judge --fix`. 126 ambiguous pairs evaluated, 91 bad matches deleted, 35 verified correct. Report: `reports/llm-judge-cleanup.md`.
 
 ---
 
