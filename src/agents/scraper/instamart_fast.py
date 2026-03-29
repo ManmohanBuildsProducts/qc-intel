@@ -38,7 +38,7 @@ class InstamartFastScraper:
         self.service = ScrapeService(conn)
 
     def _build_server(self) -> StdioServerParameters:
-        args = ["@playwright/mcp@latest", "--browser", "chromium", "--headless", "--isolated"]
+        args = ["@playwright/mcp@latest", "--browser", "chromium", "--headless"]
         stealth = _stealth_script_path()
         if os.path.exists(stealth):
             args += ["--init-script", stealth]
@@ -73,9 +73,13 @@ class InstamartFastScraper:
                     return await self._run_scrape(session, pincode, category, lat, lng)
                 finally:
                     try:
-                        await session.call_tool("browser_close", {})
-                    except Exception:
-                        pass
+                        import asyncio
+                        async with asyncio.timeout(5):
+                            await session.call_tool("browser_close", {})
+                    except TimeoutError:
+                        logger.warning("[instamart-fast] browser_close timed out")
+                    except Exception as e:
+                        logger.debug("[instamart-fast] browser_close failed: %s", e)
 
     async def _run_scrape(
         self, session: ClientSession, pincode: str, category: str,

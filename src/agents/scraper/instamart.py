@@ -1,5 +1,6 @@
 """Swiggy Instamart scraper — deterministic Playwright-based product extraction."""
 
+import asyncio
 import logging
 import os
 import re
@@ -56,10 +57,15 @@ class InstamartScraper(BaseScraper):
         )
 
     async def _scrape_once(self, pincode: str, category: str) -> list[dict]:
-        """Override to use Chromium with stealth — less detectable by Swiggy's WAF."""
+        """Override to use Chromium with stealth — less detectable by Swiggy's WAF.
+
+        Does NOT use --isolated because Instamart requires persistent cookies
+        across navigations (homepage → search pages). Isolated mode creates
+        separate browser contexts per navigation, leaking browser processes.
+        """
         from .base import _get_proxy_url, _stealth_script_path
 
-        args = ["@playwright/mcp@latest", "--browser", "chromium", "--headless", "--isolated"]
+        args = ["@playwright/mcp@latest", "--browser", "chromium", "--headless"]
         stealth_path = _stealth_script_path()
         if os.path.exists(stealth_path):
             args += ["--init-script", stealth_path]
@@ -74,9 +80,12 @@ class InstamartScraper(BaseScraper):
                     return await self._run_scrape(session, pincode, category)
                 finally:
                     try:
-                        await session.call_tool("browser_close", {})
-                    except Exception:
-                        pass
+                        async with asyncio.timeout(5):
+                            await session.call_tool("browser_close", {})
+                    except TimeoutError:
+                        logger.warning("[instamart] browser_close timed out — process kill will clean up")
+                    except Exception as e:
+                        logger.debug("[instamart] browser_close failed: %s", e)
 
     async def _run_scrape(
         self, session: ClientSession, pincode: str, category: str,

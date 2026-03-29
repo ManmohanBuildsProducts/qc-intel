@@ -55,7 +55,8 @@ async def scrape_instamart_all_categories(
     lng = location.lng if location else 77.0266
 
     # Instamart uses Chromium (less detectable by Swiggy WAF)
-    args = ["@playwright/mcp@latest", "--browser", "chromium", "--headless", "--isolated"]
+    # No --isolated: Instamart needs persistent cookies across navigations
+    args = ["@playwright/mcp@latest", "--browser", "chromium", "--headless"]
     stealth = _stealth_path()
     if os.path.exists(stealth):
         args += ["--init-script", stealth]
@@ -147,9 +148,14 @@ async def scrape_instamart_all_categories(
 
             finally:
                 try:
-                    await session.call_tool("browser_close", {})
-                except Exception:
-                    pass
+                    await asyncio.wait_for(
+                        session.call_tool("browser_close", {}),
+                        timeout=5,
+                    )
+                except TimeoutError:
+                    logger.warning("[instamart/%s] browser_close timed out", pincode)
+                except Exception as e:
+                    logger.debug("[instamart/%s] browser_close failed: %s", pincode, e)
 
     return stats
 
