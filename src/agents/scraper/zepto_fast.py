@@ -139,6 +139,10 @@ class ZeptoFastScraper:
         self, session: ClientSession, pincode: str, category: str,
         lat: float, lng: float,
     ) -> list[dict]:
+        # Resolve city name from pincode
+        city = "Gurugram" if pincode.startswith("122") else "Jaipur"
+        address = f"{city}, {'Haryana' if city == 'Gurugram' else 'Rajasthan'}"
+
         logger.info("[zepto-fast] Setting location for %s (%.4f, %.4f)", pincode, lat, lng)
         await session.call_tool("browser_navigate", {"url": "https://www.zepto.com"})
         await session.call_tool("browser_wait_for", {"time": 3000})
@@ -147,7 +151,7 @@ class ZeptoFastScraper:
             f'() => {{ '
             f'const pos = {{state: {{userPosition: {{'
             f'lat: {lat}, lng: {lng}, pincode: "{pincode}", '
-            f'city: "Jaipur", address: "Jaipur, Rajasthan"'
+            f'city: "{city}", address: "{address}"'
             f'}}, _hasHydrated: true}}, version: 0}}; '
             f'localStorage.setItem("user-position", JSON.stringify(pos)); '
             f'return "location set"; }}'

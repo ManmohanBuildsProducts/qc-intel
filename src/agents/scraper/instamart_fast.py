@@ -90,9 +90,10 @@ class InstamartFastScraper:
         await session.call_tool("browser_navigate", {"url": "https://www.swiggy.com"})
         await session.call_tool("browser_wait_for", {"time": 3000})
 
+        city = "Gurugram" if pincode.startswith("122") else "Jaipur"
         loc_json = (
-            f'{{"address":"Jaipur","lat":{lat},"lng":{lng},'
-            f'"id":"","annotation":"","name":"Jaipur"}}'
+            f'{{"address":"{city}","lat":{lat},"lng":{lng},'
+            f'"id":"","annotation":"","name":"{city}"}}'
         )
         await session.call_tool("browser_evaluate", {"function": (
             f'() => {{ '
