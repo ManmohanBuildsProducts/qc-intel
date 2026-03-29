@@ -215,60 +215,123 @@ class SalesRepository:
     def calculate_and_store_daily_sales(self, date: str, pincode: str | None = None) -> int:
         """Calculate daily sales from morning/night observation pairs.
 
+        Uses platform-aware estimation:
+        - Blinkit/Zepto (have inventory_count): morning_inv - night_inv
+        - Instamart (boolean only): in_stock transitions (in_stock→OOS = 1 unit)
+
         Returns the number of sales records created.
         """
-        # Use COALESCE(inventory_count, max_cart_qty) as the quantity signal.
-        # inventory_count is the real platform stock level (populated for Blinkit/Instamart).
-        # max_cart_qty is the fallback when inventory_count is NULL (Zepto snapshot path).
-        qty_expr = "COALESCE(inventory_count, max_cart_qty)"
-        pincode_clause = " AND pincode = ?" if pincode else ""
+        pincode_clause = " AND po.pincode = ?" if pincode else ""
         params: list = [date]
         if pincode:
             params.append(pincode)
 
+        # Fetch morning + night pairs with platform info and both qty signals
         night_rows = self.conn.execute(
-            f"SELECT catalog_id, pincode, {qty_expr} FROM product_observations"
-            f" WHERE date(observed_at) = ? AND time_of_day = 'night'{pincode_clause}",
+            f"""SELECT po.catalog_id, po.pincode, po.inventory_count,
+                       po.max_cart_qty, po.in_stock, pc.platform
+                FROM product_observations po
+                JOIN product_catalog pc ON po.catalog_id = pc.id
+                WHERE date(po.observed_at) = ? AND po.time_of_day = 'night'{pincode_clause}""",
             params,
         ).fetchall()
 
         morning_full = self.conn.execute(
-            f"SELECT catalog_id, pincode, {qty_expr} FROM product_observations"
-            f" WHERE date(observed_at) = ? AND time_of_day = 'morning'{pincode_clause}",
+            f"""SELECT po.catalog_id, po.pincode, po.inventory_count,
+                       po.max_cart_qty, po.in_stock, pc.platform
+                FROM product_observations po
+                JOIN product_catalog pc ON po.catalog_id = pc.id
+                WHERE date(po.observed_at) = ? AND po.time_of_day = 'morning'{pincode_clause}""",
             params,
         ).fetchall()
 
-        morning_map: dict[tuple[int, str], int] = {}
+        # morning_map: (catalog_id, pincode) → (inventory_count, max_cart_qty, in_stock, platform)
+        morning_map: dict[tuple[int, str], tuple] = {}
         for row in morning_full:
-            morning_map[(row[0], row[1])] = row[2]
+            morning_map[(row[0], row[1])] = (row[2], row[3], row[4], row[5])
 
         count = 0
         with get_cursor(self.conn) as cur:
             for row in night_rows:
-                cat_id, pin, night_qty = row[0], row[1], row[2]
+                cat_id, pin = row[0], row[1]
+                night_inv, night_mcq, night_stock, _ = row[2], row[3], row[4], row[5]
                 key = (cat_id, pin)
 
                 if key not in morning_map:
-                    # Missing morning → no_data
                     continue
 
-                morning_qty = morning_map[key]
-                del morning_map[key]  # Mark as processed
+                morning_inv, morning_mcq, morning_stock, _ = morning_map[key]
+                del morning_map[key]
 
-                # Calculate
-                if morning_qty > night_qty:
-                    estimated = morning_qty - night_qty
-                    confidence = Confidence.HIGH
-                    restock = False
-                elif morning_qty == night_qty:
-                    estimated = 0
-                    confidence = Confidence.MEDIUM
-                    restock = False
+                # Platform-aware estimation
+                # Known caps: Blinkit and Zepto both cap inventory_count at 50.
+                # When at cap, delta is a lower bound (real sales >= estimated).
+                _INV_CAP = 50
+
+                if morning_inv is not None and night_inv is not None:
+                    # Blinkit/Zepto: real inventory delta
+                    morning_qty = morning_inv
+                    night_qty = night_inv
+                    morning_capped = morning_inv >= _INV_CAP
+                    if morning_qty > night_qty:
+                        estimated = morning_qty - night_qty
+                        # If morning was at cap, real delta could be higher
+                        confidence = Confidence.MEDIUM if morning_capped else Confidence.HIGH
+                        restock = False
+                    elif morning_qty == night_qty:
+                        if morning_capped and night_inv >= _INV_CAP:
+                            # Both at cap — could be 0 sales or many; we don't know
+                            estimated = 0
+                            confidence = Confidence.LOW
+                        else:
+                            estimated = 0
+                            confidence = Confidence.MEDIUM
+                        restock = False
+                    else:
+                        estimated = 0
+                        confidence = Confidence.LOW
+                        restock = True
+                elif morning_mcq != night_mcq:
+                    # No inventory_count but max_cart_qty changed — use as proxy
+                    morning_qty = morning_mcq
+                    night_qty = night_mcq
+                    if morning_qty > night_qty:
+                        estimated = morning_qty - night_qty
+                        confidence = Confidence.LOW
+                        restock = False
+                    elif morning_qty < night_qty:
+                        estimated = 0
+                        confidence = Confidence.LOW
+                        restock = True
+                    else:
+                        estimated = 0
+                        confidence = Confidence.LOW
+                        restock = False
+                elif morning_stock is not None and night_stock is not None:
+                    # Instamart or platforms without inventory: in_stock transitions
+                    morning_qty = 1 if morning_stock else 0
+                    night_qty = 1 if night_stock else 0
+                    if morning_stock and not night_stock:
+                        # Was in stock, now OOS → sold out
+                        estimated = 1
+                        confidence = Confidence.LOW
+                        restock = False
+                    elif not morning_stock and night_stock:
+                        # Was OOS, now in stock → restock
+                        estimated = 0
+                        confidence = Confidence.LOW
+                        restock = True
+                    else:
+                        estimated = 0
+                        confidence = Confidence.LOW
+                        restock = False
                 else:
-                    # night > morning = restock
+                    # No usable signal
+                    morning_qty = morning_mcq
+                    night_qty = night_mcq
                     estimated = 0
                     confidence = Confidence.LOW
-                    restock = True
+                    restock = False
 
                 cur.execute(
                     """

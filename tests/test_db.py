@@ -259,13 +259,15 @@ class TestSalesRepository:
         obs_repo.insert_observation(ProductObservation(
             catalog_id=cat_id, scrape_run_id="run-m",
             pincode="122001", price=29.0,
-            max_cart_qty=morning_qty, time_of_day=TimeOfDay.MORNING,
+            max_cart_qty=1, inventory_count=morning_qty,
+            time_of_day=TimeOfDay.MORNING,
         ))
         db_conn.execute(
             """
             INSERT INTO product_observations
-                (catalog_id, scrape_run_id, pincode, price, max_cart_qty, time_of_day, observed_at)
-            VALUES (?, 'run-n', '122001', 29.0, ?, 'night', datetime('now'))
+                (catalog_id, scrape_run_id, pincode, price, max_cart_qty,
+                 inventory_count, time_of_day, observed_at)
+            VALUES (?, 'run-n', '122001', 29.0, 1, ?, 'night', datetime('now'))
             """,
             (cat_id, night_qty),
         )

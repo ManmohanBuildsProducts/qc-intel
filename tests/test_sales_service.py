@@ -36,7 +36,8 @@ def _seed_observations(
             scrape_run_id="run-morning-001",
             pincode=pincode,
             price=29.0,
-            max_cart_qty=morning_qty,
+            max_cart_qty=1,
+            inventory_count=morning_qty,
             time_of_day=TimeOfDay.MORNING,
         )
     )
@@ -46,7 +47,8 @@ def _seed_observations(
             scrape_run_id="run-night-001",
             pincode=pincode,
             price=29.0,
-            max_cart_qty=night_qty,
+            max_cart_qty=1,
+            inventory_count=night_qty,
             time_of_day=TimeOfDay.NIGHT,
         )
     )

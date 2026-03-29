@@ -192,9 +192,72 @@ class InstamartScraper(BaseScraper):
     def _extract_from_api_response(data: dict, category: str) -> list[dict]:
         """Extract products from Instamart search API JSON response.
 
-        API returns: data.data.widgets[].data.products[].product
+        Supports two API structures:
+          Old: data.data.widgets[].data.products[].product
+          New (2026+): data.cards[].card.card.gridElements.infoWithStyle.items[].variations[]
         """
         products = []
+
+        # Try new structure first: data.cards[]
+        cards = data.get("data", {}).get("cards", []) or []
+        for card in cards:
+            if not isinstance(card, dict):
+                continue
+            inner = card.get("card", {}).get("card", {})
+            items = inner.get("gridElements", {}).get("infoWithStyle", {}).get("items", [])
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                # Each item has variations[] — each variation is a SKU
+                variations = item.get("variations") or []
+                for var in variations:
+                    if not isinstance(var, dict):
+                        continue
+                    name = var.get("displayName", "")
+                    if not name:
+                        continue
+                    # Price is nested: price.offerPrice.units, price.mrp.units
+                    price_obj = var.get("price") or {}
+                    offer = price_obj.get("offerPrice") or {}
+                    mrp_obj = price_obj.get("mrp") or {}
+                    price = float(offer.get("units") or offer.get("amount") or 0)
+                    mrp = float(mrp_obj.get("units") or mrp_obj.get("amount") or price)
+                    # Inventory: only boolean inStock
+                    inv_obj = var.get("inventory") or {}
+                    in_stock = inv_obj.get("inStock", True)
+                    # Cart quantity limit
+                    cart_qty_obj = var.get("cartAllowedQuantity") or {}
+                    max_qty = cart_qty_obj.get("allowedQuantity", 0)
+                    # IDs
+                    sku_id = var.get("skuId") or var.get("spinId") or ""
+                    product_id = item.get("productId") or sku_id
+                    # Images
+                    image_ids = var.get("imageIds") or []
+                    image_url = (
+                        f"https://media-assets.swiggy.com/swiggy/image/upload/{image_ids[0]}"
+                        if image_ids else None
+                    )
+                    products.append({
+                        "id": str(product_id),
+                        "name": name,
+                        "brand": var.get("brandName"),
+                        "category": category,
+                        "subcategory": var.get("subCategoryType"),
+                        "packSize": var.get("quantityDescription"),
+                        "price": price,
+                        "totalPrice": mrp,
+                        "inStock": in_stock,
+                        "maxSelectableQuantity": max_qty,
+                        "inventory_count": None,  # Instamart does not expose numeric inventory
+                        "image_url": image_url,
+                        "images": image_ids,
+                    })
+
+        if products:
+            logger.info("[instamart] Extracted %d products from new cards[] structure", len(products))
+            return products
+
+        # Fallback: old structure data.data.widgets[].data.products[].product
         widgets = data.get("data", {}).get("widgets", []) or []
         for widget in widgets:
             if not isinstance(widget, dict):
@@ -211,9 +274,7 @@ class InstamartScraper(BaseScraper):
                 price = float(pricing.get("offer_price") or pricing.get("price") or 0)
                 mrp = float(pricing.get("mrp") or price)
                 cat_info = prod.get("category") or {}
-                # Real product ID from API
                 real_id = prod.get("id") or prod.get("product_id")
-                # Image URL: try direct field, then images array
                 images = prod.get("images") or []
                 image_url = prod.get("image_url") or (images[0] if images else None)
                 products.append({
@@ -222,12 +283,12 @@ class InstamartScraper(BaseScraper):
                     "brand": prod.get("brand_name"),
                     "category": category,
                     "subcategory": cat_info.get("name") if isinstance(cat_info, dict) else None,
-                    "packSize": prod.get("weight") or prod.get("quantity"),
+                    "packSize": prod.get("weight") or prod.get("packSize"),
                     "price": price,
                     "totalPrice": mrp,
                     "inStock": prod.get("in_stock", True),
                     "maxSelectableQuantity": prod.get("max_selectable_quantity", 0),
-                    "inventory_count": prod.get("available_quantity") or prod.get("inventory_count"),
+                    "inventory_count": None,
                     "image_url": image_url,
                     "images": images,
                 })

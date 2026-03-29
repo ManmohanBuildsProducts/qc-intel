@@ -104,6 +104,13 @@ def parse_zepto_products(items: list[dict], category: str) -> list[ScrapedProduc
                 continue
             seen_ids.add(platform_product_id)
 
+            inv = item.get("quantity")  # real inventory from API
+            if inv is not None:
+                logger.info(
+                    "[zepto-inv] %s | quantity=%s max_cart_qty=%s in_stock=%s",
+                    name[:40], inv, item.get("max_cart_quantity"), item.get("in_stock"),
+                )
+
             product = ScrapedProduct(
                 platform=Platform.ZEPTO,
                 platform_product_id=platform_product_id,
@@ -117,12 +124,17 @@ def parse_zepto_products(items: list[dict], category: str) -> list[ScrapedProduc
                 mrp=item.get("mrp"),
                 in_stock=item.get("in_stock", True),
                 max_cart_qty=int(item.get("max_cart_quantity") or 0),
-                inventory_count=item.get("quantity"),  # real inventory from API
+                inventory_count=inv,
                 raw_json=json.dumps(item),
             )
             products.append(product)
         except (ValidationError, KeyError, TypeError) as e:
             logger.warning("Skipping invalid Zepto item: %s", e)
+    with_inv = sum(1 for p in products if p.inventory_count is not None)
+    logger.info(
+        "[zepto-inv-summary] %d/%d products have inventory_count",
+        with_inv, len(products),
+    )
     return products
 
 
@@ -149,6 +161,15 @@ def parse_instamart_products(items: list[dict], category: str) -> list[ScrapedPr
                 str(raw_id) if raw_id else _stable_id("instamart", name, item.get("packSize"))
             )
 
+            inv = item.get("inventory_count") or item.get("available_quantity")
+            if inv is not None:
+                logger.info(
+                    "[instamart-inv] %s | inv=%s max_sel_qty=%s in_stock=%s",
+                    name[:40], inv,
+                    item.get("maxSelectableQuantity") or item.get("max_cart_qty"),
+                    item.get("inStock", item.get("in_stock")),
+                )
+
             product = ScrapedProduct(
                 platform=Platform.INSTAMART,
                 platform_product_id=platform_product_id,
@@ -162,10 +183,15 @@ def parse_instamart_products(items: list[dict], category: str) -> list[ScrapedPr
                 mrp=item.get("totalPrice") or item.get("mrp"),
                 in_stock=item.get("inStock", item.get("in_stock", True)),
                 max_cart_qty=int(item.get("maxSelectableQuantity") or item.get("max_cart_qty") or 0),
-                inventory_count=item.get("inventory_count") or item.get("available_quantity"),
+                inventory_count=inv,
                 raw_json=json.dumps(item),
             )
             products.append(product)
         except (ValidationError, KeyError, TypeError) as e:
             logger.warning("Skipping invalid Instamart item: %s", e)
+    with_inv = sum(1 for p in products if p.inventory_count is not None)
+    logger.info(
+        "[instamart-inv-summary] %d/%d products have inventory_count",
+        with_inv, len(products),
+    )
     return products
