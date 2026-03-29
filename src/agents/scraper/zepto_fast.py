@@ -96,7 +96,10 @@ class ZeptoFastScraper:
         self.service = ScrapeService(conn)
 
     def _build_server(self) -> StdioServerParameters:
-        args = ["@playwright/mcp@latest", "--browser", "firefox", "--headless", "--isolated"]
+        args = [
+            "@playwright/mcp@latest", "--browser", "firefox",
+            "--headless", "--isolated", "--caps", "code-execution",
+        ]
         stealth = _stealth_script_path()
         if os.path.exists(stealth):
             args += ["--init-script", stealth]
@@ -155,25 +158,42 @@ class ZeptoFastScraper:
         seen_names: set[str] = set()
 
         for term in terms:
-            url = f"https://www.zepto.com/search?query={term}"
             logger.info("[zepto-fast] Searching: %s", term)
-            await session.call_tool("browser_navigate", {"url": url})
-            await session.call_tool("browser_wait_for", {"time": 3000})
 
-            # Scroll to trigger lazy-loaded RSC chunks, then wait for data
-            await session.call_tool("browser_evaluate", {
-                "function": "() => { window.scrollTo(0, 2000); return 'scrolled'; }",
-            })
-            await session.call_tool("browser_wait_for", {"time": 2000})
+            # Use page.waitForResponse to intercept the BFF gateway API response.
+            # This captures at the Playwright network level — works even though
+            # the API is called server-side by Next.js (it still goes through the browser).
+            bff_code = (
+                "async (page) => {"
+                "  var responsePromise = page.waitForResponse("
+                "    function(r) { return r.url().includes('bff-gateway') && r.url().includes('search'); },"
+                "    { timeout: 15000 }"
+                "  );"
+                f"  await page.goto('https://www.zepto.com/search?query={term}', "
+                "    { waitUntil: 'domcontentloaded' });"
+                "  var response = await responsePromise;"
+                "  var body = await response.json();"
+                "  var products = [];"
+                "  function walk(obj) {"
+                "    if (!obj || typeof obj !== 'object') return;"
+                "    if (Array.isArray(obj)) { obj.forEach(walk); return; }"
+                "    if (obj.availableQuantity !== undefined && obj.product && obj.mrp !== undefined) {"
+                "      products.push(obj);"
+                "    }"
+                "    Object.values(obj).forEach(function(v) {"
+                "      if (v && typeof v === 'object') walk(v);"
+                "    });"
+                "  }"
+                "  walk(body);"
+                "  return JSON.stringify(products);"
+                "}"
+            )
 
-            # Extract products from RSC flight data
-            result = await session.call_tool("browser_evaluate", {
-                "function": _RSC_EXTRACT_JS,
-            })
-            rsc_products = self._parse_json_result(result)
+            result = await session.call_tool("browser_run_code", {"code": bff_code})
+            bff_products = self._parse_json_result(result)
 
-            if rsc_products:
-                items = self._normalize_rsc_products(rsc_products, category)
+            if bff_products:
+                items = self._normalize_rsc_products(bff_products, category)
                 for item in items:
                     pid = item.get("product_id", "")
                     name = item.get("name", "")
@@ -188,12 +208,12 @@ class ZeptoFastScraper:
                     seen_names.add(name)
                     all_items.append(item)
                 logger.info(
-                    "[zepto-fast] term=%s rsc_products=%d total=%d",
+                    "[zepto-fast] term=%s bff_products=%d total=%d",
                     term, len(items), len(all_items),
                 )
             else:
                 # Fallback: snapshot extraction (no inventory data)
-                logger.warning("[zepto-fast] No RSC data for '%s', falling back to snapshot", term)
+                logger.warning("[zepto-fast] BFF capture failed for '%s', falling back to snapshot", term)
                 from .zepto import ZeptoScraper
 
                 snap_result = await session.call_tool("browser_snapshot", {})
