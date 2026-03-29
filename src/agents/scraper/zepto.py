@@ -70,6 +70,7 @@ class ZeptoScraper(BaseScraper):
         # Step 2: Search for products in this category
         terms = CATEGORY_SEARCH_TERMS.get(category, [category.lower()])
         all_items: list[dict] = []
+        seen_ids: set[str] = set()
         seen_names: set[str] = set()
         location_clicked = False
 
@@ -101,13 +102,21 @@ class ZeptoScraper(BaseScraper):
             snapshot = await self._snapshot(session)
             items = self._extract_from_snapshot(snapshot, category)
             for item in items:
+                pid = item.get("product_id", "")
                 name = item.get("name", "")
-                if name and name not in seen_names:
-                    seen_names.add(name)
-                    # Preserve real pvid from URL extraction — only assign sequential fallback if missing
-                    if not item.get("product_id"):
-                        item["product_id"] = f"z-{len(all_items) + 1}"
-                    all_items.append(item)
+                if not name:
+                    continue
+                if pid and pid in seen_ids:
+                    continue
+                if name in seen_names:
+                    continue
+                # Preserve real pvid from URL extraction — only assign sequential fallback if missing
+                if not pid:
+                    pid = f"z-{len(all_items) + 1}"
+                    item["product_id"] = pid
+                seen_ids.add(pid)
+                seen_names.add(name)
+                all_items.append(item)
 
             logger.info(
                 "[zepto] term=%s found=%d total=%d",

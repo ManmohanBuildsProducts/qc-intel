@@ -98,6 +98,7 @@ class ZeptoFastScraper:
 
         terms = CATEGORY_SEARCH_TERMS.get(category, [category.lower()])
         all_items: list[dict] = []
+        seen_ids: set[str] = set()
         seen_names: set[str] = set()
 
         for term in terms:
@@ -123,10 +124,18 @@ class ZeptoFastScraper:
                     body = capture.get("body", {})
                     items = self._extract_products(body, category)
                     for item in items:
+                        pid = item.get("product_id", "")
                         name = item.get("name", "")
-                        if name and name not in seen_names:
-                            seen_names.add(name)
-                            all_items.append(item)
+                        if not name:
+                            continue
+                        if pid and pid in seen_ids:
+                            continue
+                        if name in seen_names:
+                            continue
+                        if pid:
+                            seen_ids.add(pid)
+                        seen_names.add(name)
+                        all_items.append(item)
                 logger.info(
                     "[zepto-fast] term=%s captures=%d total=%d",
                     term, len(captures), len(all_items),
@@ -140,10 +149,18 @@ class ZeptoFastScraper:
                 snap_text = self._result_text(snap_result)
                 items = ZeptoScraper._extract_from_snapshot(snap_text, category)
                 for item in items:
+                    pid = item.get("product_id", "")
                     name = item.get("name", "")
-                    if name and name not in seen_names:
-                        seen_names.add(name)
-                        all_items.append(item)
+                    if not name:
+                        continue
+                    if pid and pid in seen_ids:
+                        continue
+                    if name in seen_names:
+                        continue
+                    if pid:
+                        seen_ids.add(pid)
+                    seen_names.add(name)
+                    all_items.append(item)
                 logger.info(
                     "[zepto-fast] term=%s snapshot_items=%d total=%d",
                     term, len(items), len(all_items),

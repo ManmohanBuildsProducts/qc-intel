@@ -82,8 +82,10 @@ def parse_zepto_products(items: list[dict], category: str) -> list[ScrapedProduc
 
     Supports both snapshot-parsed items (product_id as pvid string) and
     API-parsed items (product_id as pvid, quantity as real inventory count).
+    Deduplicates by platform_product_id to prevent duplicate catalog entries.
     """
     products: list[ScrapedProduct] = []
+    seen_ids: set[str] = set()
     for item in items:
         try:
             images = item.get("images", [])
@@ -97,6 +99,10 @@ def parse_zepto_products(items: list[dict], category: str) -> list[ScrapedProduc
             platform_product_id = (
                 raw_id if raw_id else _stable_id("zepto", name, item.get("unit_quantity"))
             )
+
+            if platform_product_id in seen_ids:
+                continue
+            seen_ids.add(platform_product_id)
 
             product = ScrapedProduct(
                 platform=Platform.ZEPTO,
