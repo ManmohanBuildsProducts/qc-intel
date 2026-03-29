@@ -211,10 +211,11 @@ class ZeptoFastScraper:
                             "brand_name": obj.get("brand_name") or obj.get("brand"),
                             "category": category,
                             "subcategory": obj.get("subcategory") or obj.get("category"),
-                            "unit_quantity": obj.get("unit_quantity") or obj.get("quantity"),
+                            "unit_quantity": obj.get("unit_quantity"),
                             "discounted_price": obj.get("discounted_price") or obj.get("price", 0),
                             "mrp": obj.get("mrp", 0),
                             "in_stock": obj.get("in_stock", True),
+                            "quantity": obj.get("quantity"),  # real inventory count
                             "max_cart_quantity": obj.get("max_cart_quantity", 5),
                             "images": obj.get("images", []),
                         })
