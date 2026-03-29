@@ -10,7 +10,6 @@ Usage:
 """
 
 import argparse
-import asyncio
 import json
 import logging
 import sqlite3
@@ -164,8 +163,16 @@ def strategy1_sweep(thresholds: list[float]) -> list[dict]:
     return results
 
 
-async def strategy2_llm_judge(fix: bool = False) -> dict | None:
-    """LLM judge on live DB ambiguous pairs (0.70 <= sim < 0.85)."""
+def strategy2_llm_judge(fix: bool = False) -> dict | None:
+    """LLM judge on live DB ambiguous pairs using Kaggle open-source LLM.
+
+    Collects all ambiguous pairs (0.80 <= sim < 0.85), sends them to
+    KaggleLLMJudgeClient for batch inference on T4 GPU, then reads
+    back cached verdicts.
+
+    If verdicts are already cached from a previous run, uses those
+    directly without re-running the kernel.
+    """
     if not LIVE_DB_PATH.exists():
         return None
 
@@ -190,11 +197,13 @@ async def strategy2_llm_judge(fix: bool = False) -> dict | None:
         conn.close()
         return {"total": 0, "verified": 0, "rejected": []}
 
-    # For each ambiguous product, find its anchor (blinkit product in same canonical)
     normalizer = NormalizerService(conn)
-    semaphore = asyncio.Semaphore(5)
 
-    async def validate_row(row) -> tuple[bool, dict]:
+    # Build pairs for all ambiguous rows
+    pairs_data = []
+    row_info: list[dict] = []
+
+    for row in rows:
         anchor_row = conn.execute(
             """
             SELECT pc.id, pc.name, pc.brand, pc.unit, pc.platform, pc.category, pc.subcategory,
@@ -208,8 +217,7 @@ async def strategy2_llm_judge(fix: bool = False) -> dict | None:
         ).fetchone()
 
         if not anchor_row:
-            # No blinkit anchor found — skip
-            return True, {}
+            continue
 
         product_a = CatalogProduct(
             id=anchor_row[0],
@@ -232,23 +240,54 @@ async def strategy2_llm_judge(fix: bool = False) -> dict | None:
             unit=row["unit"],
         )
 
-        async with semaphore:
-            is_valid = await normalizer._validate_match_with_llm(product_a, product_b, row["similarity_score"])
+        pairs_data.append({
+            "pair_id": product_a.id,
+            "catalog_id_a": product_a.id,
+            "catalog_id_b": product_b.id,
+            "name_a": product_a.name,
+            "brand_a": product_a.brand,
+            "unit_a": product_a.unit,
+            "name_b": product_b.name,
+            "brand_b": product_b.brand,
+            "unit_b": product_b.unit,
+            "similarity": round(row["similarity_score"], 4),
+        })
 
-        info = {
+        row_info.append({
             "catalog_id": row["catalog_id"],
             "canonical_id": row["canonical_id"],
             "similarity": row["similarity_score"],
             "product_a": f"{product_a.brand} {product_a.name} ({product_a.unit})",
             "product_b": f"{product_b.brand} {product_b.name} ({product_b.unit})",
-        }
-        return is_valid, info
+            "pair_id": product_a.id,
+        })
 
-    tasks = [validate_row(row) for row in rows]
-    results = await asyncio.gather(*tasks)
+    if not pairs_data:
+        conn.close()
+        return {"total": len(rows), "verified": len(rows), "rejected": []}
 
-    verified = sum(1 for ok, _ in results if ok)
-    rejected = [info for ok, info in results if not ok and info]
+    # Try cached verdicts first, otherwise trigger Kaggle run
+    judge = normalizer.judge_client
+    verdicts = judge.get_verdicts()
+
+    if not verdicts:
+        print(f"\n  Uploading {len(pairs_data)} pairs to Kaggle LLM judge...")
+        result = judge.run_judge_pipeline(pairs_data)
+        if result is None:
+            conn.close()
+            return {"total": len(rows), "verified": 0, "rejected": [], "error": "Kaggle kernel failed"}
+        verdicts = judge.get_verdicts()
+
+    # Apply verdicts
+    verified = 0
+    rejected = []
+    for info in row_info:
+        pair_id = info["pair_id"]
+        is_valid = verdicts.get(pair_id, True)  # Default to True if no verdict
+        if is_valid:
+            verified += 1
+        else:
+            rejected.append(info)
 
     if fix and rejected:
         for info in rejected:
@@ -260,11 +299,15 @@ async def strategy2_llm_judge(fix: bool = False) -> dict | None:
 
     conn.close()
 
+    # Report benchmark results if available
+    benchmark = judge.load_benchmark()
+
     return {
         "total": len(rows),
         "verified": verified,
         "rejected": rejected,
         "fixed": fix,
+        "benchmark": benchmark,
     }
 
 
@@ -402,9 +445,11 @@ def print_report(
 
     if llm_results is not _SKIP:
         print()
-        print("[Strategy 2 — LLM Judge (production DB)]")
+        print("[Strategy 2 — LLM Judge (Kaggle Qwen2.5-7B, production DB)]")
         if llm_results is None:
             print(f"  Skipped (live DB not found at {LIVE_DB_PATH})")
+        elif llm_results.get("error"):
+            print(f"  Error: {llm_results['error']}")
         elif llm_results.get("total", 0) == 0:
             print("  No ambiguous pairs found in live DB.")
         else:
@@ -412,11 +457,11 @@ def print_report(
             verified = llm_results["verified"]
             rejected = llm_results.get("rejected", [])
             pct = verified / total * 100 if total > 0 else 0
-            print(f"  Ambiguous pairs (0.70–{HIGH_CONFIDENCE_THRESHOLD:.2f}): {total}")
-            print(f"  Verified correct by Gemini: {verified}/{total} = {pct:.1f}% precision")
+            print(f"  Ambiguous pairs ({AMBIGUOUS_LOWER_THRESHOLD:.2f}–{HIGH_CONFIDENCE_THRESHOLD:.2f}): {total}")
+            print(f"  Verified correct: {verified}/{total} = {pct:.1f}% precision")
             if rejected:
                 print(f"  Bad matches: {len(rejected)}")
-                for r in rejected[:5]:  # Show max 5 examples
+                for r in rejected[:5]:
                     print(f"    sim={r['similarity']:.3f}  {r['product_a']}  ↔  {r['product_b']}")
                 if len(rejected) > 5:
                     print(f"    ... and {len(rejected) - 5} more")
@@ -424,6 +469,17 @@ def print_report(
                     print(f"  Deleted {len(rejected)} bad mappings from DB (--fix applied).")
                 else:
                     print("  Run with --fix to delete bad mappings.")
+
+            # Show benchmark results if available
+            benchmark = llm_results.get("benchmark")
+            if benchmark:
+                print()
+                print("  Benchmark vs Gemini ground truth:")
+                print(f"    Accuracy:  {benchmark['accuracy'] * 100:.1f}% (threshold: 95%)")
+                print(f"    Precision: {benchmark['precision'] * 100:.1f}%")
+                print(f"    Recall:    {benchmark['recall'] * 100:.1f}%")
+                print(f"    F1:        {benchmark['f1'] * 100:.1f}%")
+                print(f"    Result:    {'PASSED' if benchmark.get('passed') else 'FAILED'}")
 
     if rule_results is not None and rule_results is not _SKIP:
         print()
@@ -484,7 +540,7 @@ def main() -> None:
             llm_results = None
         else:
             print(f"Running Strategy 2: LLM judge on {LIVE_DB_PATH}...", end=" ", flush=True)
-            llm_results = asyncio.run(strategy2_llm_judge(fix=args.fix))
+            llm_results = strategy2_llm_judge(fix=args.fix)
             print("done")
 
     # Strategy 3: rule-based on live DB (or fixture DB if no live)

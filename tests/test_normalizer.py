@@ -3,9 +3,7 @@
 import json
 import sqlite3
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock
 
 from src.agents.normalizer import NormalizerService
 from src.agents.scraper.service import ScrapeService
@@ -278,8 +276,7 @@ class TestMRPGuard:
 
 
 class TestLLMValidation:
-    @pytest.mark.asyncio
-    async def test_validate_match_yes(self, db_session: sqlite3.Connection) -> None:
+    def test_validate_match_yes(self, db_session: sqlite3.Connection) -> None:
         normalizer = NormalizerService(db_session)
         product_a = CatalogProduct(
             id=1,
@@ -300,19 +297,15 @@ class TestLLMValidation:
             unit="500 ml",
         )
 
-        mock_response = MagicMock()
-        mock_response.text = "YES"
+        # Mock judge client to return cached YES verdict for pair_id=1
+        mock_judge = MagicMock()
+        mock_judge.get_verdicts.return_value = {1: True}
+        normalizer.judge_client = mock_judge
 
-        with patch("src.agents.normalizer.genai.Client") as mock_client_cls:
-            mock_client = MagicMock()
-            mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
-            mock_client_cls.return_value = mock_client
-            result = await normalizer._validate_match_with_llm(product_a, product_b, 0.78)
-
+        result = normalizer._validate_match_with_llm(product_a, product_b, 0.78)
         assert result is True
 
-    @pytest.mark.asyncio
-    async def test_validate_match_no(self, db_session: sqlite3.Connection) -> None:
+    def test_validate_match_no(self, db_session: sqlite3.Connection) -> None:
         normalizer = NormalizerService(db_session)
         product_a = CatalogProduct(
             id=1,
@@ -333,13 +326,67 @@ class TestLLMValidation:
             unit="200g",
         )
 
-        mock_response = MagicMock()
-        mock_response.text = "NO"
+        # Mock judge client to return cached NO verdict for pair_id=1
+        mock_judge = MagicMock()
+        mock_judge.get_verdicts.return_value = {1: False}
+        normalizer.judge_client = mock_judge
 
-        with patch("src.agents.normalizer.genai.Client") as mock_client_cls:
-            mock_client = MagicMock()
-            mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
-            mock_client_cls.return_value = mock_client
-            result = await normalizer._validate_match_with_llm(product_a, product_b, 0.72)
-
+        result = normalizer._validate_match_with_llm(product_a, product_b, 0.72)
         assert result is False
+
+    def test_validate_match_no_verdicts_defaults_no(self, db_session: sqlite3.Connection) -> None:
+        normalizer = NormalizerService(db_session)
+        product_a = CatalogProduct(
+            id=1,
+            platform=Platform.BLINKIT,
+            platform_product_id="1",
+            name="Amul Butter",
+            brand="Amul",
+            category="Dairy",
+            unit="100g",
+        )
+        product_b = CatalogProduct(
+            id=2,
+            platform=Platform.ZEPTO,
+            platform_product_id="2",
+            name="Amul Butter",
+            brand="Amul",
+            category="Dairy",
+            unit="100g",
+        )
+
+        # No cached verdicts — defaults to NO (conservative)
+        mock_judge = MagicMock()
+        mock_judge.get_verdicts.return_value = {}
+        normalizer.judge_client = mock_judge
+
+        result = normalizer._validate_match_with_llm(product_a, product_b, 0.82)
+        assert result is False
+
+    def test_prepare_judge_pairs(self, db_session: sqlite3.Connection) -> None:
+        normalizer = NormalizerService(db_session)
+        product_a = CatalogProduct(
+            id=10,
+            platform=Platform.BLINKIT,
+            platform_product_id="10",
+            name="Amul Taaza",
+            brand="Amul",
+            category="Dairy",
+            unit="500ml",
+        )
+        product_b = CatalogProduct(
+            id=20,
+            platform=Platform.ZEPTO,
+            platform_product_id="20",
+            name="Amul Taaza Milk",
+            brand="Amul",
+            category="Dairy",
+            unit="500 ml",
+        )
+
+        pairs = normalizer.prepare_judge_pairs([(product_a, product_b, 0.83)])
+        assert len(pairs) == 1
+        assert pairs[0]["pair_id"] == 10
+        assert pairs[0]["catalog_id_a"] == 10
+        assert pairs[0]["catalog_id_b"] == 20
+        assert pairs[0]["similarity"] == 0.83

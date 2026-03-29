@@ -3,12 +3,9 @@
 import logging
 import sqlite3
 
-from google import genai
-from google.genai import types as genai_types
-
-from src.config.settings import settings
 from src.db.repository import CanonicalRepository
 from src.embeddings.kaggle_client import KaggleEmbeddingClient
+from src.embeddings.kaggle_llm_judge import KaggleLLMJudgeClient
 from src.embeddings.product_embedder import ProductEmbedder
 from src.embeddings.unit_normalizer import normalize_unit
 from src.models.product import (
@@ -35,6 +32,7 @@ class NormalizerService:
         self.canonical_repo = CanonicalRepository(conn)
         self.embedder = ProductEmbedder()
         self.kaggle_client = KaggleEmbeddingClient()
+        self.judge_client = KaggleLLMJudgeClient()
         self._mrp_cache: dict[int, float | None] = {}
 
     def _get_latest_mrp(self, catalog_id: int) -> float | None:
@@ -224,20 +222,59 @@ class NormalizerService:
             unmapped_count=unmapped_count,
         )
 
-    async def _validate_match_with_llm(
+    def _validate_match_with_llm(
         self, product_a: CatalogProduct, product_b: CatalogProduct, similarity: float
     ) -> bool:
-        """Use Gemini to validate an ambiguous product match."""
-        client = genai.Client(api_key=settings.google_api_key)
-        response = await client.aio.models.generate_content(
-            model=settings.normalizer_model,
-            contents=(
-                f"Are these the same product? Answer YES or NO only.\n"
-                f"Product A: {product_a.name} ({product_a.brand}, {product_a.unit})\n"
-                f"Product B: {product_b.name} ({product_b.brand}, {product_b.unit})\n"
-                f"Similarity score: {similarity:.2f}"
-            ),
-            config=genai_types.GenerateContentConfig(max_output_tokens=200),
+        """Validate an ambiguous product match using pre-computed Kaggle LLM verdicts.
+
+        Looks up the verdict from cached Kaggle judge results. Falls back to
+        conservative NO if no verdict is cached for this pair.
+        """
+        verdicts = self.judge_client.get_verdicts()
+        if not verdicts:
+            logger.warning("No cached LLM judge verdicts — defaulting to NO")
+            return False
+
+        # Look up by both catalog IDs (pair_id is constructed as catalog_id_a in upload)
+        pair_id = product_a.id
+        if pair_id in verdicts:
+            return verdicts[pair_id]
+
+        # Try reverse lookup
+        pair_id = product_b.id
+        if pair_id in verdicts:
+            return verdicts[pair_id]
+
+        logger.debug(
+            "No verdict for pair (%d, %d) — defaulting to NO",
+            product_a.id, product_b.id,
         )
-        answer = (response.text or "").strip().upper()
-        return answer.startswith("YES")
+        return False
+
+    def prepare_judge_pairs(
+        self,
+        pairs: list[tuple[CatalogProduct, CatalogProduct, float]],
+    ) -> list[dict]:
+        """Convert product pairs into the format expected by the Kaggle LLM judge.
+
+        Args:
+            pairs: List of (product_a, product_b, similarity) tuples.
+
+        Returns:
+            List of dicts ready for KaggleLLMJudgeClient.upload_pairs().
+        """
+        return [
+            {
+                "pair_id": a.id,
+                "catalog_id_a": a.id,
+                "catalog_id_b": b.id,
+                "name_a": a.name,
+                "brand_a": a.brand,
+                "unit_a": a.unit,
+                "name_b": b.name,
+                "brand_b": b.brand,
+                "unit_b": b.unit,
+                "similarity": round(sim, 4),
+            }
+            for a, b, sim in pairs
+        ]
