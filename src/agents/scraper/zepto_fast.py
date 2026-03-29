@@ -8,6 +8,7 @@ inventory fields (availableQuantity, allocatedQuantity, outOfStock, etc.)
 that are invisible in the rendered DOM.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -237,7 +238,104 @@ class ZeptoFastScraper:
                     term, len(items), len(all_items),
                 )
 
+        # ATC probing: for products at inventory cap (50), find real stock
+        # by clicking ADD + Increase on their product page (no login needed)
+        _INV_CAP = 50
+        capped = [item for item in all_items if (item.get("quantity") or 0) >= _INV_CAP]
+        if capped:
+            logger.info(
+                "[zepto-fast] %d/%d products at inventory cap (%d), probing real stock via ATC...",
+                len(capped), len(all_items), _INV_CAP,
+            )
+            probed = 0
+            for item in capped:
+                real_qty = await self._probe_atc_max(session, item)
+                logger.info("[zepto-fast] ATC probe result: %s → %s", item.get("name", "?")[:30], real_qty)
+                if real_qty and real_qty > _INV_CAP:
+                    logger.info(
+                        "[zepto-fast] ATC probe: %s | capped=%d real=%d",
+                        item.get("name", "?")[:40], _INV_CAP, real_qty,
+                    )
+                    item["quantity"] = real_qty
+                    probed += 1
+            logger.info("[zepto-fast] ATC probing done: %d/%d uncapped", probed, len(capped))
+
         return all_items
+
+    async def _probe_atc_max(self, session: ClientSession, item: dict) -> int | None:
+        """Probe real stock for a capped product via ATC (no login needed).
+
+        Uses MCP browser_click (accessibility tree) which is reliable,
+        unlike Playwright CSS selectors which miss Zepto's custom components.
+        """
+        name = item.get("name", "")
+        query = name.split("|")[0].split("(")[0].strip()[:40]
+        url = f"https://www.zepto.com/search?query={query}"
+
+        try:
+            await session.call_tool("browser_navigate", {"url": url})
+            await session.call_tool("browser_wait_for", {"time": 3000})
+
+            # Find ADD button via accessibility snapshot
+            snap = await session.call_tool("browser_snapshot", {})
+            text = self._result_text(snap)
+            add_refs = re.findall(r'button "ADD" \[ref=(\w+)\]', text)
+            if not add_refs:
+                return None
+
+            # Click ADD
+            await session.call_tool("browser_click", {"element": "ADD", "ref": add_refs[0]})
+            await session.call_tool("browser_wait_for", {"time": 1500})
+
+            # Find Increase button ref
+            snap2 = await session.call_tool("browser_snapshot", {})
+            text2 = self._result_text(snap2)
+            inc_refs = re.findall(r'button "Increase quantity" \[ref=(\w+)\]', text2)
+            if not inc_refs:
+                return None
+
+            # Click Increase repeatedly until quantity stops growing
+            inc_ref = inc_refs[0]
+            qty = 1
+            stuck = 0
+            for i in range(500):
+                try:
+                    await session.call_tool("browser_click", {
+                        "element": "Increase quantity", "ref": inc_ref,
+                    })
+                except Exception:
+                    break
+                await asyncio.sleep(0.15)
+
+                # Check qty every 10 clicks
+                if (i + 1) % 10 == 0:
+                    snap_c = await session.call_tool("browser_snapshot", {})
+                    text_c = self._result_text(snap_c)
+                    qty_match = re.search(r'generic \[ref=\w+\]: "(\d+)"', text_c)
+                    new_qty = int(qty_match.group(1)) if qty_match else qty
+                    # Update Increase ref in case it changed
+                    new_inc = re.findall(r'button "Increase quantity" \[ref=(\w+)\]', text_c)
+                    if new_inc:
+                        inc_ref = new_inc[0]
+                    if new_qty == qty:
+                        stuck += 1
+                        if stuck >= 2:
+                            break
+                    else:
+                        stuck = 0
+                        qty = new_qty
+
+            # Remove from cart: click Decrease to remove
+            dec_refs = re.findall(r'button "Decrease quantity" \[ref=(\w+)\]', text_c)
+            if dec_refs:
+                await session.call_tool("browser_click", {
+                    "element": "Decrease quantity", "ref": dec_refs[0],
+                })
+
+            return qty
+        except Exception as e:
+            logger.warning("[zepto-fast] ATC probe failed for %s: %s", name[:30], e)
+        return None
 
     @staticmethod
     def _normalize_rsc_products(rsc_products: list[dict], category: str) -> list[dict]:
