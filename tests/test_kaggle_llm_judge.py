@@ -23,7 +23,7 @@ def judge_client(tmp_path: Path) -> KaggleLLMJudgeClient:
 
 class TestKaggleLLMJudgeClient:
     def test_kernel_id(self, judge_client: KaggleLLMJudgeClient) -> None:
-        assert judge_client.kernel_id == "testuser/qc-intel-llm-judge"
+        assert judge_client.kernel_id == "testuser/qc-intel-llm-judge-qwen2-5-7b-instruct"
 
     def test_get_verdicts_empty(self, judge_client: KaggleLLMJudgeClient) -> None:
         verdicts = judge_client.get_verdicts()

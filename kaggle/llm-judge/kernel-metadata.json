@@ -1,13 +1,19 @@
 {
-  "id": "manmohanbuilds/qc-intel-llm-judge",
-  "title": "QC Intel — LLM Judge (Qwen2.5-7B-Instruct)",
+  "id": "manmohanbuilds/qc-intel-llm-judge-qwen2-5-7b-instruct",
+  "title": "QC Intel \u2014 LLM Judge (Qwen2.5-7B-Instruct)",
   "code_file": "llm_judge.py",
   "language": "python",
   "kernel_type": "script",
   "is_private": true,
   "enable_gpu": true,
-  "enable_internet": true,
-  "dataset_sources": ["manmohanbuilds/qc-intel-judge-pairs", "manmohanbuilds/qc-intel-llm-models"],
+  "enable_internet": false,
+  "machine_shape": "NvidiaTeslaT4",
+  "dataset_sources": [
+    "manmohanbuilds/qc-intel-judge-pairs"
+  ],
   "competition_sources": [],
-  "kernel_sources": []
+  "kernel_sources": [],
+  "model_sources": [
+    "qwen-lm/qwen2.5/transformers/7b-instruct/1"
+  ]
 }

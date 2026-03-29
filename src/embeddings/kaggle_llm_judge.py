@@ -22,7 +22,7 @@ class KaggleLLMJudgeClient:
     def __init__(
         self,
         username: str | None = None,
-        kernel_slug: str = "qc-intel-llm-judge",
+        kernel_slug: str = "qc-intel-llm-judge-qwen2-5-7b-instruct",
         cache_dir: str | None = None,
     ) -> None:
         self.username = username or settings.kaggle_username
@@ -97,9 +97,9 @@ class KaggleLLMJudgeClient:
             logger.info("Judge dataset created: %s (%d pairs)", dataset_slug, len(pairs))
 
     def push_kernel(self) -> None:
-        """Push the LLM judge kernel to Kaggle for execution."""
-        self.api.kernels_push(str(JUDGE_KERNEL_DIR))
-        logger.info("Judge kernel pushed: %s", self.kernel_id)
+        """Push the LLM judge kernel to Kaggle for execution on T4 GPU."""
+        self.api.kernels_push(str(JUDGE_KERNEL_DIR), acc="NvidiaTeslaT4")
+        logger.info("Judge kernel pushed: %s (NvidiaTeslaT4)", self.kernel_id)
 
     def poll_status(self, timeout: int = 1200, interval: int = 30) -> str:
         """Poll kernel status until complete or error. Returns final status.
@@ -107,14 +107,31 @@ class KaggleLLMJudgeClient:
         Timeout is higher than embedding kernel (1200s vs 900s) because
         LLM inference is slower.
         """
+        # Wait for kernel to start (Kaggle has a queue delay after push)
+        logger.info("Waiting 60s for kernel to enter queue...")
+        time.sleep(60)
+
         deadline = time.time() + timeout
+        seen_running = False
         while time.time() < deadline:
             response = self.api.kernels_status(self.kernel_id)
-            status = response.get("status", response) if isinstance(response, dict) else str(response)
+            if hasattr(response, "status"):
+                status = str(response.status).split(".")[-1].lower()
+            elif isinstance(response, dict):
+                status = str(response.get("status", "unknown")).lower()
+            else:
+                status = str(response).lower()
             logger.info("Judge kernel status: %s", status)
 
-            if status in ("complete", "error", "cancelAcknowledged"):
-                return status
+            if status in ("running", "queued"):
+                seen_running = True
+            elif status == "complete":
+                return "complete"
+            elif status == "error":
+                # Only trust error if we saw it running first (not stale from previous run)
+                if seen_running:
+                    return "error"
+                logger.info("Error status may be stale — waiting for new run to start...")
 
             time.sleep(interval)
 

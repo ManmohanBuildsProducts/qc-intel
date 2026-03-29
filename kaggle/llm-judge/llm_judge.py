@@ -34,32 +34,47 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-_KAGGLE_PATHS = [
-    Path("/kaggle/input/datasets/manmohanbuilds/qc-intel-judge-pairs"),
-    Path("/kaggle/input/qc-intel-judge-pairs"),
-]
 INPUT_DIR = Path("input")  # fallback
-for _p in _KAGGLE_PATHS:
-    if _p.exists():
-        INPUT_DIR = _p
-        break
+# Search all possible Kaggle dataset mount paths
+_KAGGLE_INPUT = Path("/kaggle/input")
+if _KAGGLE_INPUT.exists():
+    # Direct slug mount (e.g. /kaggle/input/qc-intel-judge-pairs/)
+    for child in _KAGGLE_INPUT.iterdir():
+        if "judge-pairs" in child.name and child.is_dir():
+            INPUT_DIR = child
+            break
+    # Nested datasets mount (e.g. /kaggle/input/datasets/<user>/qc-intel-judge-pairs/)
+    datasets_dir = _KAGGLE_INPUT / "datasets"
+    if INPUT_DIR == Path("input") and datasets_dir.exists():
+        for user_dir in datasets_dir.iterdir():
+            for ds_dir in user_dir.iterdir():
+                if "judge-pairs" in ds_dir.name:
+                    INPUT_DIR = ds_dir
+                    break
 
 PAIRS_PATH = INPUT_DIR / "pairs.json"
 RESULTS_OUT = Path("judge_results.json")
 BENCHMARK_OUT = Path("benchmark_results.json")
 
-# Model config
+# Model config — official Kaggle Model (full precision, loaded with bitsandbytes int8)
 MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct"
-MODELS_DIR = Path("/kaggle/input/datasets/manmohanbuilds/qc-intel-llm-models")
-if not MODELS_DIR.exists():
-    MODELS_DIR = Path("/kaggle/input/qc-intel-llm-models")
+KAGGLE_MODEL_PATH = Path("/kaggle/input/qwen2.5/transformers/7b-instruct/1")
 
-LOCAL_MODEL_PATH = MODELS_DIR / "Qwen2.5-7B-Instruct"
+# Fallback paths for different Kaggle mount styles
+_FALLBACK_PATHS = [
+    Path("/kaggle/input/models/qwen-lm/qwen2.5/transformers/7b-instruct/1"),
+    Path("/kaggle/input/qwen2.5/transformers/7b-instruct"),
+]
 
-# Force offline if model is pre-uploaded
-if LOCAL_MODEL_PATH.exists():
-    os.environ["HF_HUB_OFFLINE"] = "1"
-    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+LOCAL_MODEL_PATH = KAGGLE_MODEL_PATH
+for _p in [KAGGLE_MODEL_PATH, *_FALLBACK_PATHS]:
+    if _p.exists():
+        LOCAL_MODEL_PATH = _p
+        break
+
+# Force offline — model is pre-loaded via Kaggle Model source
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
 PROMPT_TEMPLATE = """You are a product matching expert for Indian quick commerce platforms (Blinkit, Zepto, Instamart).
 
@@ -75,35 +90,46 @@ Rules:
 - Same brand but different variant (e.g. "Toned" vs "Full Cream") = NO
 - Same brand but different size (e.g. "500ml" vs "1L") = NO
 - Minor name differences across platforms (e.g. "Amul Taaza" vs "Amul Taaza Toned Milk") = YES if same product
+- Verbose or reworded listings that share the same brand + product line + variant = YES (e.g. "Sunfeast Dark Fantasy Bourbon" vs "Classic Bourbon Biscuits made with Real Chocolate by Sunfeast Dark Fantasy")
+- Different spellings of the same Indian product = YES (e.g. "Sonamasuri"/"Sona Masoori", "Atta"/"Aata", "Paneer"/"Paner"). Ignore qualifiers like "Raw" if the core product is the same
+- For produce: "Desi", "Local", "Regular" are DIFFERENT variants — treat as NO
 
 Answer with ONLY "YES" or "NO"."""
 
 
 def load_model() -> tuple[Any, Any]:
-    """Load Qwen2.5-7B-Instruct with int8 quantization."""
+    """Load Qwen2.5-7B-Instruct in fp16 on T4 GPU (14GB VRAM, fits in 16GB)."""
     import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+    from transformers import AutoModelForCausalLM, AutoTokenizer
 
     model_path = str(LOCAL_MODEL_PATH) if LOCAL_MODEL_PATH.exists() else MODEL_NAME
     log.info("Loading model from: %s", model_path)
 
-    quantization_config = BitsAndBytesConfig(
-        load_in_8bit=True,
-        llm_int8_threshold=6.0,
-    )
+    if LOCAL_MODEL_PATH.exists():
+        log.info("Contents of model dir: %s", list(LOCAL_MODEL_PATH.iterdir())[:10])
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_path,
         trust_remote_code=True,
     )
 
-    model = AutoModelForCausalLM.from_pretrained(
-        model_path,
-        quantization_config=quantization_config,
-        device_map="auto",
-        trust_remote_code=True,
-        torch_dtype=torch.float16,
-    )
+    # Use fp16 directly — 7B model in fp16 is ~14GB, fits on T4 (16GB VRAM)
+    # Falls back to CPU if no GPU available
+    if torch.cuda.is_available():
+        log.info("Loading in fp16 on GPU")
+        model = AutoModelForCausalLM.from_pretrained(
+            model_path,
+            device_map="auto",
+            trust_remote_code=True,
+            dtype=torch.float16,
+        )
+    else:
+        log.warning("No GPU available — loading in fp32 on CPU (will be slow)")
+        model = AutoModelForCausalLM.from_pretrained(
+            model_path,
+            device_map="cpu",
+            trust_remote_code=True,
+        )
 
     log.info("Model loaded. Device map: %s", getattr(model, "hf_device_map", "n/a"))
     return model, tokenizer
@@ -242,7 +268,7 @@ def run_benchmark(
 
 
 def main() -> None:
-    log.info("QC Intel — LLM Judge (Qwen2.5-7B-Instruct int8)")
+    log.info("QC Intel — LLM Judge (Qwen2.5-7B-Instruct GPTQ-Int4)")
     log.info("GPU available: %s", os.environ.get("CUDA_VISIBLE_DEVICES", "not set"))
 
     # Detect GPU
@@ -259,6 +285,7 @@ def main() -> None:
     if kaggle_input.exists():
         log.info("Contents of /kaggle/input/: %s", list(kaggle_input.iterdir()))
 
+    log.info("LOCAL_MODEL_PATH: %s (exists=%s)", LOCAL_MODEL_PATH, LOCAL_MODEL_PATH.exists())
     log.info("INPUT_DIR: %s (exists=%s)", INPUT_DIR, INPUT_DIR.exists())
     log.info("PAIRS_PATH: %s (exists=%s)", PAIRS_PATH, PAIRS_PATH.exists())
 
@@ -295,7 +322,7 @@ def main() -> None:
     # Write results
     output = {
         "model": MODEL_NAME,
-        "quantization": "int8",
+        "quantization": "bnb-int8",
         "timestamp": datetime.now(UTC).isoformat(),
         "count": len(results),
         "model_load_time_s": round(load_time, 1),

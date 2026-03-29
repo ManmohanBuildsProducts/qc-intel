@@ -1,9 +1,9 @@
 # QC Intel — Progress Log
 
 ## Current State
-- **Last completed:** WS6 (embedding upgrade to bge-m3, Kaggle pipeline, MRP guard, all-category normalization)
-- **Next up:** Backlog items in `context/kaggle-backlog.md` (Zepto dedup, LLM judge cleanup, reranker, incremental normalization)
-- **Gate status:** WS6 PASSED
+- **Last completed:** WS7 (LLM judge benchmark — Qwen2.5-7B on Kaggle, Gemini ground truth, prompt tuning)
+- **Next up:** Re-run LLM judge on GPU when Kaggle quota resets (may improve from 93.5% → 95%+). Backlog: reranker, incremental normalization
+- **Gate status:** WS7 SHIPPED (93.5% accuracy, 100% precision, CPU-only caveat)
 - **Tests:** 236/236 passing
 - **Lint:** ruff clean on all files (0 errors)
 - **Branch:** main

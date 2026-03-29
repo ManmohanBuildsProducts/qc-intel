@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import asyncio
 import json
 import logging
 import sqlite3
@@ -163,15 +164,71 @@ def strategy1_sweep(thresholds: list[float]) -> list[dict]:
     return results
 
 
+async def _collect_gemini_ground_truth(pairs_data: list[dict]) -> dict[int, bool]:
+    """Call Gemini on each pair to establish ground truth verdicts for benchmarking.
+
+    Uses the same prompt template as the Kaggle kernel so comparison is fair.
+    """
+    from google import genai
+
+    from src.config.settings import settings
+
+    client = genai.Client(api_key=settings.google_api_key)
+    ground_truth: dict[int, bool] = {}
+
+    prompt_template = (
+        "You are a product matching expert for Indian quick commerce platforms "
+        "(Blinkit, Zepto, Instamart).\n\n"
+        "Determine if these two product listings refer to the SAME physical product "
+        "(same brand, same variant, same size/weight).\n\n"
+        "Product A: {name_a} ({brand_a}, {unit_a})\n"
+        "Product B: {name_b} ({brand_b}, {unit_b})\n"
+        "Embedding similarity: {similarity:.2f}\n\n"
+        "Rules:\n"
+        "- Same brand + same variant + same size = YES\n"
+        "- Different brand = NO\n"
+        "- Same brand but different variant (e.g. 'Toned' vs 'Full Cream') = NO\n"
+        "- Same brand but different size (e.g. '500ml' vs '1L') = NO\n"
+        "- Minor name differences across platforms = YES if same product\n"
+        "- Verbose or reworded listings that share the same brand + product line "
+        "+ variant = YES (e.g. 'Sunfeast Dark Fantasy Bourbon' vs "
+        "'Classic Bourbon Biscuits made with Real Chocolate by Sunfeast Dark Fantasy')\n"
+        "- Different spellings of the same Indian product = YES "
+        "(e.g. 'Sonamasuri'/'Sona Masoori', 'Atta'/'Aata', 'Paneer'/'Paner'). "
+        "Ignore qualifiers like 'Raw' if the core product is the same\n"
+        "- For produce: 'Desi', 'Local', 'Regular' are DIFFERENT variants — treat as NO\n\n"
+        "Answer with ONLY 'YES' or 'NO'."
+    )
+
+    for i, pair in enumerate(pairs_data):
+        prompt = prompt_template.format(**pair)
+        try:
+            response = await client.aio.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config=genai.types.GenerateContentConfig(max_output_tokens=5),
+            )
+            answer = (response.text or "").strip().upper()
+            ground_truth[pair["pair_id"]] = answer.startswith("YES")
+        except Exception as e:
+            logging.getLogger(__name__).warning("Gemini failed for pair %d: %s", pair["pair_id"], e)
+            continue
+
+        if (i + 1) % 10 == 0 or i == len(pairs_data) - 1:
+            print(f"\r  Gemini ground truth: {i + 1}/{len(pairs_data)}", end="", flush=True)
+
+    print()  # newline after progress
+    return ground_truth
+
+
 def strategy2_llm_judge(fix: bool = False) -> dict | None:
-    """LLM judge on live DB ambiguous pairs using Kaggle open-source LLM.
+    """LLM judge benchmark: Gemini ground truth → Kaggle Qwen2.5-7B → compare.
 
-    Collects all ambiguous pairs (0.80 <= sim < 0.85), sends them to
-    KaggleLLMJudgeClient for batch inference on T4 GPU, then reads
-    back cached verdicts.
-
-    If verdicts are already cached from a previous run, uses those
-    directly without re-running the kernel.
+    1. Collects all ambiguous pairs (0.80 <= sim < 0.85) from live DB
+    2. Calls Gemini on each pair to establish ground truth
+    3. Uploads pairs + Gemini verdicts to Kaggle
+    4. Runs Qwen2.5-7B-Instruct (int8) on T4 GPU
+    5. Downloads verdicts + benchmark metrics
     """
     if not LIVE_DB_PATH.exists():
         return None
@@ -266,24 +323,30 @@ def strategy2_llm_judge(fix: bool = False) -> dict | None:
         conn.close()
         return {"total": len(rows), "verified": len(rows), "rejected": []}
 
-    # Try cached verdicts first, otherwise trigger Kaggle run
     judge = normalizer.judge_client
-    verdicts = judge.get_verdicts()
 
-    if not verdicts:
-        print(f"\n  Uploading {len(pairs_data)} pairs to Kaggle LLM judge...")
-        result = judge.run_judge_pipeline(pairs_data)
-        if result is None:
-            conn.close()
-            return {"total": len(rows), "verified": 0, "rejected": [], "error": "Kaggle kernel failed"}
-        verdicts = judge.get_verdicts()
+    # Step 1: Collect Gemini ground truth
+    print(f"\n  Collecting Gemini ground truth for {len(pairs_data)} ambiguous pairs...")
+    gemini_gt = asyncio.run(_collect_gemini_ground_truth(pairs_data))
+    gt_yes = sum(1 for v in gemini_gt.values() if v)
+    gt_no = sum(1 for v in gemini_gt.values() if not v)
+    print(f"  Gemini verdicts: {gt_yes} YES, {gt_no} NO ({len(gemini_gt)} total)")
+
+    # Step 2: Upload pairs + ground truth to Kaggle, run kernel
+    print(f"  Uploading {len(pairs_data)} pairs + Gemini ground truth to Kaggle...")
+    result = judge.run_judge_pipeline(pairs_data, gemini_ground_truth=gemini_gt)
+    if result is None:
+        conn.close()
+        return {"total": len(rows), "verified": 0, "rejected": [], "error": "Kaggle kernel failed"}
+
+    verdicts = judge.get_verdicts()
 
     # Apply verdicts
     verified = 0
     rejected = []
     for info in row_info:
         pair_id = info["pair_id"]
-        is_valid = verdicts.get(pair_id, True)  # Default to True if no verdict
+        is_valid = verdicts.get(pair_id, True)
         if is_valid:
             verified += 1
         else:
@@ -299,7 +362,6 @@ def strategy2_llm_judge(fix: bool = False) -> dict | None:
 
     conn.close()
 
-    # Report benchmark results if available
     benchmark = judge.load_benchmark()
 
     return {
@@ -308,6 +370,7 @@ def strategy2_llm_judge(fix: bool = False) -> dict | None:
         "rejected": rejected,
         "fixed": fix,
         "benchmark": benchmark,
+        "gemini_ground_truth": {"yes": gt_yes, "no": gt_no, "total": len(gemini_gt)},
     }
 
 
@@ -421,7 +484,9 @@ def print_report(
     if sweep_results is not None and sweep_results is not _SKIP:
         print()
         print("[Strategy 1 — Fixture Ground Truth]")
-        print(f"  Ground truth pairs: {_GT_TOTAL} ({len(_GT_IDX_BL_ZP)} blinkit-zepto, {len(_GT_IDX_BL_IM)} blinkit-instamart)")
+        bl_zp = len(_GT_IDX_BL_ZP)
+        bl_im = len(_GT_IDX_BL_IM)
+        print(f"  Ground truth pairs: {_GT_TOTAL} ({bl_zp} blinkit-zepto, {bl_im} blinkit-instamart)")
         print()
         print(f"  {'Threshold':>10}  {'Precision':>10}  {'Recall':>8}  {'F1':>8}  {'TP':>4}  {'FP':>4}  {'FN':>4}")
         print("  " + "-" * 60)
