@@ -86,11 +86,11 @@ class AnalyticsService:
         for p in brand_in_category:
             platforms_present.add(p.platform.value)
 
-        # Get latest observations for price data
+        # Get latest observations for price data — try all pincodes, pick first hit
         brand_prices: list[dict] = []
         for p in brand_in_category:
             if p.id:
-                obs = self.observation_repo.get_latest_for_product(p.id, "122001")
+                obs = self._get_latest_observation(p.id)
                 if obs:
                     brand_prices.append({
                         "name": p.name,
@@ -104,7 +104,7 @@ class AnalyticsService:
         competitor_prices: list[dict] = []
         for p in competitor_products[:50]:
             if p.id:
-                obs = self.observation_repo.get_latest_for_product(p.id, "122001")
+                obs = self._get_latest_observation(p.id)
                 if obs:
                     competitor_prices.append({
                         "name": p.name,
@@ -113,6 +113,9 @@ class AnalyticsService:
                         "price": obs.price,
                         "mrp": obs.mrp,
                     })
+
+        # Sales data (from daily_sales table)
+        sales_data = self._get_sales_data(brand, category)
 
         # Cross-platform view
         cross_platform = self.canonical_repo.get_cross_platform_view()
@@ -132,6 +135,66 @@ class AnalyticsService:
             "brand_prices": brand_prices,
             "competitor_prices": competitor_prices,
             "cross_platform_products": brand_cross_platform,
+            "sales_data": sales_data,
+        }
+
+    def _get_latest_observation(self, catalog_id: int):
+        """Get latest observation for a product across any pincode."""
+        row = self.conn.execute(
+            "SELECT * FROM product_observations WHERE catalog_id = ? ORDER BY observed_at DESC LIMIT 1",
+            (catalog_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return self.observation_repo._row_to_model(row)
+
+    def _get_sales_data(self, brand: str, category: str) -> dict:
+        """Get sales summary for brand and category from daily_sales."""
+        # Brand sales by product
+        brand_sales = self.conn.execute(
+            """
+            SELECT pc.name, pc.platform, SUM(ds.estimated_sales) as total_sales,
+                   AVG(ds.estimated_sales) as avg_sales, COUNT(*) as observations,
+                   SUM(ds.restock_flag) as restocks
+            FROM daily_sales ds
+            JOIN product_catalog pc ON ds.catalog_id = pc.id
+            WHERE pc.brand = ? AND pc.category = ?
+            AND ds.confidence = 'high'
+            GROUP BY pc.id
+            ORDER BY total_sales DESC
+            """,
+            (brand, category),
+        ).fetchall()
+
+        # Top sellers in category (any brand)
+        category_top = self.conn.execute(
+            """
+            SELECT pc.name, pc.brand, pc.platform, SUM(ds.estimated_sales) as total_sales
+            FROM daily_sales ds
+            JOIN product_catalog pc ON ds.catalog_id = pc.id
+            WHERE pc.category = ? AND ds.confidence = 'high'
+            GROUP BY pc.id
+            ORDER BY total_sales DESC
+            LIMIT 20
+            """,
+            (category,),
+        ).fetchall()
+
+        return {
+            "brand_sales": [
+                {"name": r[0], "platform": r[1], "total_units": r[2],
+                 "avg_per_pincode": round(r[3], 1), "pincode_count": r[4], "restocks": r[5]}
+                for r in brand_sales
+            ],
+            "category_top_sellers": [
+                {"name": r[0], "brand": r[1], "platform": r[2], "total_units": r[3]}
+                for r in category_top
+            ],
+            "data_note": (
+                "Sales estimated from Blinkit inventory deltas only (morning - night). "
+                "Zepto and Instamart do not expose inventory counts. "
+                "Blinkit caps inventory at 50 — high-velocity SKUs may be underestimated."
+            ),
         }
 
     async def generate_report(self, brand: str, category: str) -> MarketReport:
@@ -148,7 +211,7 @@ class AnalyticsService:
             contents=user_message,
             config=genai.types.GenerateContentConfig(
                 system_instruction=system_prompt,
-                max_output_tokens=4096,
+                max_output_tokens=16384,
             ),
         )
         report_content = response.text or ""
@@ -215,6 +278,23 @@ class AnalyticsService:
             for cp in data["cross_platform_products"]:
                 platforms = [pl["platform"] for pl in cp["platforms"]]
                 lines.append(f"- {cp['canonical_name']}: {', '.join(platforms)}")
+
+        # Sales velocity data
+        sales = data.get("sales_data", {})
+        if sales.get("brand_sales"):
+            lines.append(f"\n### {data['brand']} Sales Velocity (Blinkit inventory delta)")
+            lines.append(f"*{sales['data_note']}*")
+            for s in sales["brand_sales"]:
+                lines.append(
+                    f"- {s['name']} ({s['platform']}): {s['total_units']} units sold "
+                    f"(avg {s['avg_per_pincode']}/pincode across {s['pincode_count']} pincodes, "
+                    f"{s['restocks']} restocks)"
+                )
+
+        if sales.get("category_top_sellers"):
+            lines.append(f"\n### Category Top Sellers ({data['category']})")
+            for s in sales["category_top_sellers"]:
+                lines.append(f"- {s['name']} by {s['brand']} ({s['platform']}): {s['total_units']} units")
 
         return "\n".join(lines)
 

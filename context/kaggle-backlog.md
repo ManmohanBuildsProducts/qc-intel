@@ -51,7 +51,25 @@ Compute runs on laptop (no Oracle VM). Kaggle for ML only.
 
 ---
 
-## 6. Fix Zepto Scraper Dedup
+## 6. Fix Zepto & Instamart Inventory Data (Sales Estimation Broken)
+
+**Priority:** Critical | **When:** Before next sales calculation
+**Quota:** N/A (local fix)
+
+> **Problem:** Sales estimation (`morning_inv - night_inv`) produces zero for Zepto and Instamart because neither platform populates `inventory_count`. The fallback `COALESCE(inventory_count, max_cart_qty)` returns a constant 5 for both, so delta is always 0. Only Blinkit has real inventory data (0–50 range, 100% coverage).
+>
+> **Evidence (2026-03-28):** 9,233 total estimated units — 100% from Blinkit. Zepto (4,955 pairs) and Instamart (670 pairs) both reported 0 units sold.
+>
+> **Fix options:**
+> 1. **Scraper fix**: Find Zepto/Instamart API fields that expose real stock levels (e.g., `available_quantity`, `inventory`, `stock_count`) and map to `inventory_count`
+> 2. **Proxy signal**: Use `in_stock` boolean transitions (in_stock=1 morning → in_stock=0 night = "sold out") as a binary sales signal if real counts aren't available
+> 3. **Max cart qty changes**: Some platforms reduce max_cart_qty as stock drops — check if this varies between morning/night
+>
+> **Also:** Blinkit caps `inventory_count` at 50 (7.1% of obs at ceiling). High-velocity SKUs are underestimated. No fix possible without Blinkit exposing higher counts.
+
+---
+
+## 6b. Fix Zepto Scraper Dedup
 
 **Priority:** High | **When:** Before next scrape
 **Quota:** N/A (local fix)
