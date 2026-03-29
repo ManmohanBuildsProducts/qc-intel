@@ -30,11 +30,15 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--normalize-all", action="store_true", help="Normalize all default categories")
     mode.add_argument("--analyze", action="store_true", help="Generate market intelligence report")
     mode.add_argument("--demo", action="store_true", help="Demo with fixture data (no live scraping)")
+    mode.add_argument("--scrape-and-normalize", action="store_true", help="Scrape then auto-normalize if unmapped products exceed threshold")
     mode.add_argument("--full-pipeline", action="store_true", help="Run full pipeline end-to-end")
 
     # Time of day
     parser.add_argument("--morning", action="store_true", help="Morning scrape")
     parser.add_argument("--night", action="store_true", help="Night scrape")
+
+    # Normalization threshold
+    parser.add_argument("--threshold", type=int, default=None, help="Unmapped product threshold for auto-normalize (default: from settings)")
 
     # Filters
     parser.add_argument("--date", type=str, help="Date for sales calculation (YYYY-MM-DD)")
@@ -100,6 +104,23 @@ async def async_main(args: argparse.Namespace) -> None:
     elif args.demo:
         report = await orch.run_demo()
         logger.info("Demo complete! Report: %s", report.report_path)
+
+    elif args.scrape_and_normalize:
+        time_of_day = TimeOfDay.MORNING if args.morning else TimeOfDay.NIGHT
+        platforms = [Platform(args.platform)] if args.platform else list(Platform)
+        for platform in platforms:
+            logger.info("Scraping %s (%s)...", platform.value, time_of_day.value)
+            run = await orch.run_scrape(platform, args.pincode, args.category, time_of_day)
+            logger.info("Done: %d products, %d errors", run.products_found, run.errors)
+
+        # Check for unmapped products and auto-normalize
+        results = await orch.check_and_normalize_after_scrape(threshold=args.threshold)
+        if results:
+            total_canonical = sum(r.canonical_products_created for r in results)
+            total_mappings = sum(r.mappings_created for r in results)
+            logger.info("Auto-normalized: %d canonical, %d mappings", total_canonical, total_mappings)
+        else:
+            logger.info("No categories needed normalization")
 
     elif args.full_pipeline:
         time_of_day = TimeOfDay.MORNING if args.morning else TimeOfDay.NIGHT

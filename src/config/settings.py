@@ -109,6 +109,9 @@ class Settings(BaseSettings):
     scrape_timeout: int = 30
     scrape_max_agent_turns: int = 15
 
+    # Incremental normalization
+    auto_normalize_threshold: int = 5  # trigger embedding+normalize when unmapped count >= this
+
     # Embeddings (Kaggle-hosted models)
     embedding_model: str = "BAAI/bge-m3"
     reranker_model: str = "BAAI/bge-reranker-v2-m3"

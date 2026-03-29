@@ -153,6 +153,95 @@ class TestPipelineOrchestrator:
         assert cats == {"Dairy & Bread", "Fruits & Vegetables", "Snacks & Munchies"}
 
 
+    def test_get_unmapped_categories_above_threshold(
+        self,
+        db_session: sqlite3.Connection,
+        blinkit_fixture_data: list[dict],
+        zepto_fixture_data: list[dict],
+    ) -> None:
+        from src.agents.scraper.service import ScrapeService
+        from src.orchestrator import PipelineOrchestrator
+
+        svc = ScrapeService(db_session)
+        svc.process_scrape_results(
+            blinkit_fixture_data, Platform.BLINKIT, "122001", "Dairy & Bread", TimeOfDay.MORNING
+        )
+        svc.process_scrape_results(
+            zepto_fixture_data, Platform.ZEPTO, "122001", "Dairy & Bread", TimeOfDay.MORNING
+        )
+
+        orch = PipelineOrchestrator.__new__(PipelineOrchestrator)
+        orch.conn = db_session
+
+        # All products are unmapped — should exceed threshold of 5
+        categories = orch.get_unmapped_categories(threshold=5)
+        assert "Dairy & Bread" in categories
+        assert categories["Dairy & Bread"] >= 5
+
+    def test_get_unmapped_categories_below_threshold(
+        self,
+        db_session: sqlite3.Connection,
+        blinkit_fixture_data: list[dict],
+    ) -> None:
+        from src.agents.scraper.service import ScrapeService
+        from src.orchestrator import PipelineOrchestrator
+
+        svc = ScrapeService(db_session)
+        svc.process_scrape_results(
+            blinkit_fixture_data[:2], Platform.BLINKIT, "122001", "Dairy & Bread", TimeOfDay.MORNING
+        )
+
+        orch = PipelineOrchestrator.__new__(PipelineOrchestrator)
+        orch.conn = db_session
+
+        # Only 2 products — below threshold of 5
+        categories = orch.get_unmapped_categories(threshold=5)
+        assert "Dairy & Bread" not in categories
+
+    @pytest.mark.asyncio
+    async def test_check_and_normalize_after_scrape(
+        self,
+        db_session: sqlite3.Connection,
+        blinkit_fixture_data: list[dict],
+        zepto_fixture_data: list[dict],
+    ) -> None:
+        from src.agents.scraper.service import ScrapeService
+        from src.orchestrator import PipelineOrchestrator
+
+        svc = ScrapeService(db_session)
+        svc.process_scrape_results(
+            blinkit_fixture_data, Platform.BLINKIT, "122001", "Dairy & Bread", TimeOfDay.MORNING
+        )
+        svc.process_scrape_results(
+            zepto_fixture_data, Platform.ZEPTO, "122001", "Dairy & Bread", TimeOfDay.MORNING
+        )
+
+        orch = PipelineOrchestrator.__new__(PipelineOrchestrator)
+        orch.conn = db_session
+
+        # Mock run_embedding to return None (no Kaggle available)
+        with patch.object(orch, "run_embedding", return_value=None):
+            results = await orch.check_and_normalize_after_scrape(threshold=5)
+
+        assert len(results) == 1
+        assert results[0].canonical_products_created > 0
+        assert results[0].mappings_created > 0
+
+    @pytest.mark.asyncio
+    async def test_check_and_normalize_no_unmapped(
+        self,
+        db_session: sqlite3.Connection,
+    ) -> None:
+        from src.orchestrator import PipelineOrchestrator
+
+        orch = PipelineOrchestrator.__new__(PipelineOrchestrator)
+        orch.conn = db_session
+
+        # Empty DB — no unmapped products
+        results = await orch.check_and_normalize_after_scrape(threshold=5)
+        assert results == []
+
+
 class TestCLIParsing:
     def test_scrape_morning_args(self) -> None:
         from analyze import build_parser
@@ -201,6 +290,23 @@ class TestCLIParsing:
         parser = build_parser()
         args = parser.parse_args(["--demo"])
         assert args.demo is True
+
+    def test_scrape_and_normalize_args(self) -> None:
+        from analyze import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(["--scrape-and-normalize", "--morning", "--threshold", "10"])
+        assert args.scrape_and_normalize is True
+        assert args.morning is True
+        assert args.threshold == 10
+
+    def test_scrape_and_normalize_default_threshold(self) -> None:
+        from analyze import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(["--scrape-and-normalize"])
+        assert args.scrape_and_normalize is True
+        assert args.threshold is None
 
     def test_full_pipeline_args(self) -> None:
         from analyze import build_parser

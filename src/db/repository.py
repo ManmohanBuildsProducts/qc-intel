@@ -354,6 +354,18 @@ class CanonicalRepository:
                 (mapping.catalog_id, mapping.canonical_id, mapping.similarity_score),
             )
 
+    def get_unmapped_count_by_category(self) -> dict[str, int]:
+        """Count unmapped catalog products grouped by category."""
+        rows = self.conn.execute(
+            """
+            SELECT pc.category, COUNT(*) FROM product_catalog pc
+            LEFT JOIN product_mappings pm ON pc.id = pm.catalog_id
+            WHERE pm.catalog_id IS NULL
+            GROUP BY pc.category
+            """
+        ).fetchall()
+        return {row[0]: row[1] for row in rows}
+
     def get_unmapped(self) -> list[CatalogProduct]:
         """Get catalog products not yet mapped to a canonical product."""
         rows = self.conn.execute(

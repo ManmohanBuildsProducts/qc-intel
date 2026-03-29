@@ -11,6 +11,7 @@ from src.agents.scraper.sales_service import SalesService
 from src.agents.scraper.service import ScrapeService
 from src.config.settings import settings
 from src.db.init_db import init_db
+from src.db.repository import CanonicalRepository
 from src.embeddings.catalog_export import export_catalog_to_json
 from src.embeddings.kaggle_client import KaggleEmbeddingClient
 from src.models.product import (
@@ -65,6 +66,65 @@ class PipelineOrchestrator:
         """Generate a market intelligence report."""
         service = AnalyticsService(self.conn)
         return await service.generate_report(brand, category)
+
+    def get_unmapped_categories(self, threshold: int | None = None) -> dict[str, int]:
+        """Return categories with unmapped product counts at or above threshold.
+
+        Args:
+            threshold: Minimum unmapped count to include. Defaults to settings.auto_normalize_threshold.
+
+        Returns:
+            Dict of category -> unmapped count for categories meeting the threshold.
+        """
+        threshold = threshold if threshold is not None else settings.auto_normalize_threshold
+        canonical_repo = CanonicalRepository(self.conn)
+        counts = canonical_repo.get_unmapped_count_by_category()
+        return {cat: count for cat, count in counts.items() if count >= threshold}
+
+    async def check_and_normalize_after_scrape(
+        self, threshold: int | None = None
+    ) -> list[NormalizationResult]:
+        """Detect unmapped products and auto-trigger embedding + normalization.
+
+        For each category with unmapped count >= threshold:
+        1. Run Kaggle embedding pipeline (export → push → poll → download)
+        2. Run normalization with the fresh match results
+
+        Args:
+            threshold: Override for settings.auto_normalize_threshold.
+
+        Returns:
+            List of NormalizationResult for each category processed.
+        """
+        categories = self.get_unmapped_categories(threshold)
+        if not categories:
+            logger.info("No categories need normalization (all below threshold)")
+            return []
+
+        results = []
+        for category, unmapped_count in categories.items():
+            logger.info(
+                "Category %r has %d unmapped products (threshold=%d) — running embedding + normalize",
+                category, unmapped_count, threshold if threshold is not None else settings.auto_normalize_threshold,
+            )
+
+            # Step 1: Run Kaggle embedding pipeline
+            match_results = self.run_embedding(category)
+            if match_results is None:
+                logger.warning("Embedding pipeline failed for %s — normalizing without matches", category)
+
+            # Step 2: Normalize with fresh (or no) match results
+            result = await self.run_normalization(category, match_results=match_results)
+            results.append(result)
+            logger.info(
+                "  %s: %d canonical, %d mappings, %d unmapped",
+                category,
+                result.canonical_products_created,
+                result.mappings_created,
+                result.unmapped_count,
+            )
+
+        return results
 
     async def run_full_pipeline(
         self, brand: str, category: str, pincode: str, time_of_day: TimeOfDay
