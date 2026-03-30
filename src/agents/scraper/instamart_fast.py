@@ -126,19 +126,6 @@ class InstamartFastScraper:
             captures = self._parse_result(result)
 
             if captures:
-                # One-time dump: write first capture body for inventory field discovery
-                _dump_path = os.path.join(
-                    os.path.dirname(__file__), "..", "..", "..", "data", "instamart_raw_capture.json",
-                )
-                if not os.path.exists(_dump_path):
-                    import json as _json
-                    try:
-                        with open(_dump_path, "w") as _f:
-                            _json.dump(captures[0].get("body", {}), _f, indent=2, default=str)
-                        logger.info("[instamart-fast] Dumped raw capture body to %s", _dump_path)
-                    except Exception as _e:
-                        logger.warning("[instamart-fast] Could not dump raw capture: %s", _e)
-
                 for capture in captures:
                     body = capture.get("body", {})
                     # Use existing API response parser
